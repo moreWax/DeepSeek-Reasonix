@@ -17,7 +17,12 @@ import (
 // boot.Rebuild with the session's current model/profile/effort. cli.go
 // supplies it because that is where the boot.Options (and the SharedHost, when
 // one exists) live; the TUI owns only the queue/swap/close sequencing.
-type runtimeRebuilder func(ctx context.Context, spec controllerBuildSpec, old *control.Controller) (*boot.BuildResult, error)
+type runtimeRebuildSpec struct {
+	controllerBuildSpec
+	forceFull bool
+}
+
+type runtimeRebuilder func(ctx context.Context, spec runtimeRebuildSpec, old *control.Controller) (*boot.BuildResult, error)
 
 // reloadDisposition is the /reload decision, extracted so the queue semantics
 // are unit-testable without a running tea program.
@@ -88,6 +93,10 @@ func (m *chatTUI) drainQueuedRuntimeReload() tea.Cmd {
 // serving; on success the old one is closed at exit (closing it inside the
 // TUI corrupts bubbletea's raw mode — see oldControllers).
 func (m *chatTUI) scheduleRuntimeReload() tea.Cmd {
+	return m.scheduleRuntimeReloadWithForce(true)
+}
+
+func (m *chatTUI) scheduleRuntimeReloadWithForce(forceFull bool) tea.Cmd {
 	if m == nil || m.ctrl == nil || m.rebuildRuntime == nil {
 		return nil
 	}
@@ -112,8 +121,9 @@ func (m *chatTUI) scheduleRuntimeReload() tea.Cmd {
 	}
 
 	rebuild := m.rebuildRuntime
-	spec := controllerBuildSpec{
-		ModelRef: m.modelRef,
+	spec := runtimeRebuildSpec{
+		controllerBuildSpec: controllerBuildSpec{ModelRef: m.modelRef},
+		forceFull:           forceFull,
 		// EffortOverride stays nil: the captured build options in cli.go
 		// already track the session's current effort.
 	}
@@ -215,14 +225,28 @@ func (m *chatTUI) scheduleCurrentControllerRebuild(reason, successNotice string)
 	return m.pendingModelSwitch
 }
 
-func (m *chatTUI) bindRuntimeRebuilder(maxSteps int, sink event.Sink, yolo bool, overrides *cliBuildOverrides, buildOpts func(string, int, bool, event.Sink, cliBuildOverrides) boot.Options) {
-	m.rebuildRuntime = func(ctx context.Context, spec controllerBuildSpec, old *control.Controller) (*boot.BuildResult, error) {
-		effectiveOverrides := overrides.forSelection(m.cfg, spec)
+func setupProfileBuildResultWithOverrides(ctx context.Context, modelName string, maxStepsOverride int, requireKey bool, sink event.Sink, overrides cliBuildOverrides) (*boot.BuildResult, error) {
+	migrateMCPConfigForCLIWorkspace()
+	return boot.BuildRuntime(ctx, cliProfileBuildOptions(modelName, maxStepsOverride, requireKey, sink, overrides))
+}
+
+func reusableBuildResult(previous *boot.BuildResult, active *control.Controller) *boot.BuildResult {
+	if previous == nil || previous.Controller != active {
+		return nil
+	}
+	return previous
+}
+
+func (m *chatTUI) bindRuntimeRebuilder(initial *boot.BuildResult, maxSteps int, sink event.Sink, yolo bool, overrides *cliBuildOverrides, buildOpts func(string, int, bool, event.Sink, cliBuildOverrides) boot.Options) {
+	m.lastBuildResult = initial
+	m.rebuildRuntime = func(ctx context.Context, spec runtimeRebuildSpec, old *control.Controller) (*boot.BuildResult, error) {
+		effectiveOverrides := overrides.forSelection(m.cfg, spec.controllerBuildSpec)
 		opts := buildOpts(spec.ModelRef, maxSteps, false, sink, effectiveOverrides)
+		opts.RuntimeReload.ForceFullRebuild = spec.forceFull
 		var res *boot.BuildResult
 		var err error
-		if m.lastBuildResult != nil {
-			res, err = boot.RebuildFrom(ctx, m.lastBuildResult, opts)
+		if previous := reusableBuildResult(m.lastBuildResult, old); previous != nil {
+			res, err = boot.RebuildFrom(ctx, previous, opts)
 		} else {
 			res, err = boot.Rebuild(ctx, old, opts)
 		}

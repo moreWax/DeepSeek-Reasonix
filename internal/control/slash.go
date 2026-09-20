@@ -85,8 +85,10 @@ func SlashArgItemsLazy(line string, resolve func() ArgData) ([]SlashItem, int, b
 		raw = providerArgItems(prior, data())
 	case "/skill", "/skills":
 		raw = skillArgItems(prior, data())
-	case "/plugin", "/plugins":
+	case "/plugins", "/plugin":
 		raw = pluginArgItems(prior, data())
+	case "/sptc":
+		raw = sptcArgItems(prior)
 	case "/hooks":
 		raw = hooksArgItems(prior)
 	case "/effort":
@@ -141,6 +143,17 @@ func memoryArgItems(prior []string, d ArgData) []SlashItem {
 		return items
 	}
 	return nil
+}
+
+func sptcArgItems(prior []string) []SlashItem {
+	if len(prior) > 1 {
+		return nil
+	}
+	return []SlashItem{
+		{Label: "on", Insert: "on", Hint: "enable sPTC and refresh the runtime"},
+		{Label: "off", Insert: "off", Hint: "disable sPTC and refresh the runtime"},
+		{Label: "status", Insert: "status", Hint: "show configured and active sPTC state"},
+	}
 }
 
 func goalArgItems(prior []string) []SlashItem {

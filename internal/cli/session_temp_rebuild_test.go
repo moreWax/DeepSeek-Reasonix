@@ -44,7 +44,7 @@ func TestCLIHotRebuildPathsKeepSessionTemp(t *testing.T) {
 					SessionTemp: sessionTempFromCLIController(outgoing),
 				}), nil
 			}
-			m.rebuildRuntime = func(_ context.Context, _ controllerBuildSpec, outgoing *control.Controller) (*boot.BuildResult, error) {
+			m.rebuildRuntime = func(_ context.Context, _ runtimeRebuildSpec, outgoing *control.Controller) (*boot.BuildResult, error) {
 				// Production delegates this path to boot.Rebuild, whose owning test
 				// pins the same SessionTemp transfer. This seam exercises the CLI
 				// command/swap lifecycle without booting providers or plugins.

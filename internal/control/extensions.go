@@ -33,6 +33,16 @@ func (c *Controller) loadExtensions() *dispatch.Dispatcher {
 	return d
 }
 
+// SpeculationOwner returns the plugin currently providing live speculative
+// execution, or an empty string when the runtime has no usable owner.
+func (c *Controller) SpeculationOwner() string {
+	d := c.loadExtensions()
+	if d == nil {
+		return ""
+	}
+	return d.SpeculationOwner()
+}
+
 // interceptInputReceive runs input.receive; blocked surfaces a notice.
 func (c *Controller) interceptInputReceive(ctx context.Context, input string) (text string, blocked bool, err error) {
 	d := c.loadExtensions()

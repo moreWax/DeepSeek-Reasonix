@@ -396,7 +396,9 @@ func build(ctx context.Context, opts Options) (*BuildResult, error) {
 	defer func() {
 		if pendingMgr != nil {
 			close(controllerBuildFailed)
-			_ = pendingMgr.Close()
+			// Reattach clients adopted from the previous generation before
+			// retiring fresh starts from this failed build.
+			pendingMgr.RollbackPlanStart(opts.Extensions)
 		}
 	}()
 
@@ -2003,6 +2005,7 @@ func build(ctx context.Context, opts Options) (*BuildResult, error) {
 		session:            protocol.SessionContext{SessionID: sessionID, WorkspaceRoot: root, Generation: generation},
 		ui:                 extUIHub,
 		onWarning:          extWarn,
+		previousManager:    opts.Extensions,
 		skipPromptStrategy: shouldSkipPromptStrategy(opts.PreviousPlan),
 		previousDispatcher: opts.PreviousDispatcher,
 	}, extensionMgr)
@@ -2046,6 +2049,8 @@ func build(ctx context.Context, opts Options) (*BuildResult, error) {
 		_ = extension.TrackWatcher(runtimeSet.Scope(), "skill-catalogs", func() error { skillCleanup(); return nil })
 	}
 	cleanup = wireRuntimeScopeCleanup(runtimeSet, cleanup, opts.SharedHost, pluginHost, lspMgr, opts.SessionTemp, closeBrowser)
+	runtimeCleanup := newRuntimeCleanupLifetime(cleanup)
+	cleanup = runtimeCleanup.Close
 	ctrl.SetExtensions(extensionDispatcher)
 	if extensionMgr == nil {
 		extUIHub = nil
@@ -2074,7 +2079,7 @@ func build(ctx context.Context, opts Options) (*BuildResult, error) {
 		ImplicitSkillInvocation: implicitSkillInvocation,
 	}
 	skillsOwned = true
-	return finalizeBuildResult(&BuildResult{Controller: ctrl, Snapshot: snap, Runtime: runtimeSet, Owner: owner, Extensions: extensionMgr, Dispatcher: extensionDispatcher, ExtensionUI: extUIHub, ProviderResolver: providerResolver, BaseProviderResolver: baseResolver, Assembly: assembly, SkillWatchService: skillWatchService}, !opts.deferPublish), nil
+	return finalizeBuildResult(&BuildResult{Controller: ctrl, Snapshot: snap, Runtime: runtimeSet, runtimeCleanup: runtimeCleanup, Owner: owner, Extensions: extensionMgr, Dispatcher: extensionDispatcher, ExtensionUI: extUIHub, ProviderResolver: providerResolver, BaseProviderResolver: baseResolver, Assembly: assembly, SkillWatchService: skillWatchService}, !opts.deferPublish), nil
 }
 
 // effectivePlannerModel centralizes planner precedence. Every role setting

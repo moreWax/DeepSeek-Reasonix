@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 
+	tea "charm.land/bubbletea/v2"
+
 	"reasonix/internal/config"
 	"reasonix/internal/pluginpkg"
 )
@@ -14,6 +16,14 @@ func pluginArgNames() []string {
 		return nil
 	}
 	return names
+}
+
+func (m *chatTUI) runPluginOrSptcCommand(cmd, input string) tea.Cmd {
+	if cmd == "/sptc" {
+		return m.runSptcCommand(input)
+	}
+	m.runPluginSubcommand(input)
+	return nil
 }
 
 func (m *chatTUI) runPluginSubcommand(input string) {

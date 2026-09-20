@@ -54,6 +54,14 @@ type SpeculationClient interface {
 	SetSpeculationHost(extension.SpeculationHost)
 }
 
+type exitReporter interface {
+	Exited() bool
+}
+
+type crashReporter interface {
+	Crashed() bool
+}
+
 // Options configures a Dispatcher.
 type Options struct {
 	// Warn receives human-readable warnings about optional-extension failures
@@ -212,7 +220,26 @@ func (d *Dispatcher) Speculation() SpeculationClient {
 		return nil
 	}
 	client, _ := d.clients(owner.PluginID).(SpeculationClient)
+	if state, ok := client.(crashReporter); ok && state.Crashed() {
+		return nil
+	}
+	if state, ok := client.(exitReporter); ok && state.Exited() {
+		return nil
+	}
 	return client
+}
+
+// SpeculationOwner returns the plugin owning the live speculation client.
+// An empty string means the slot has no usable runtime client.
+func (d *Dispatcher) SpeculationOwner() string {
+	if d == nil || d.Speculation() == nil {
+		return ""
+	}
+	owner, ok := d.replacements[extension.SlotSpeculation]
+	if !ok {
+		return ""
+	}
+	return owner.PluginID
 }
 
 // RegisterSpeculationScope routes reverse start/cancel requests to the agent

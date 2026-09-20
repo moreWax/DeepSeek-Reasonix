@@ -32,6 +32,9 @@ type BuildResult struct {
 	Controller *control.Controller
 	Snapshot   *extension.RuntimeSnapshot
 	Runtime    *extension.RuntimeSet
+	// runtimeCleanup is shared by every subgraph generation that reuses the
+	// same controller, so Controller.Close retires resources added after boot.
+	runtimeCleanup *runtimeCleanupLifetime
 	// Owner is the session-lineage lifecycle owner. Independent builds receive
 	// independent owners; RebuildFrom reuses the previous owner so only that
 	// lineage's old generation drains.
@@ -134,9 +137,10 @@ type legacyAssembly struct {
 // assembly: the session the sidecars serve, where non-fatal warnings go, and
 // (stage 8a) the UI hub the sidecars' host/ui/* calls bind to.
 type extensionBoot struct {
-	session   protocol.SessionContext
-	onWarning func(string)
-	ui        *uihub.Hub
+	session         protocol.SessionContext
+	onWarning       func(string)
+	ui              *uihub.Hub
+	previousManager *sidecar.Manager
 	// skipPromptStrategy skips system_prompt.build strategy when the RuntimePlan
 	// is a no-op (or does not affect cache), preserving the previous prompt.
 	skipPromptStrategy bool
@@ -269,11 +273,12 @@ func assembleLegacySnapshot(ctx context.Context, in legacyAssembly, generation u
 					return managed.Close()
 				},
 			}); err != nil {
-				_ = managed.Close()
+				managed.RollbackPlanStart(ext.previousManager)
 				return nil, err
 			}
 			// UI hub binding is a reversible generation effect (rebind is free).
 			if err := extension.TrackUIHub(rs.Scope(), snap.Generation()); err != nil {
+				managed.RollbackPlanStart(ext.previousManager)
 				_ = rs.Close()
 				return nil, err
 			}
@@ -297,7 +302,7 @@ func assembleLegacySnapshot(ctx context.Context, in legacyAssembly, generation u
 		// drive the pre-freeze strategy below.
 		claims, err := resolveReplacementClaims(legacy, sidecarContribs)
 		if err != nil {
-			_ = managed.Close()
+			managed.RollbackPlanStart(ext.previousManager)
 			return nil, nil, nil, err
 		}
 		required := requiredRuntimeSet(managed)
@@ -311,7 +316,7 @@ func assembleLegacySnapshot(ctx context.Context, in legacyAssembly, generation u
 				strategyDispatcher := dispatch.New(nil, claims, clients, required, dispatchOpts)
 				payload := dispatch.SystemPromptPayload{Prompt: prompt, WorkspaceRoot: ext.session.WorkspaceRoot}
 				if err := strategyDispatcher.RunStrategy(ctx, extension.SlotSystemPrompt, extension.PointSystemPromptBuild, &payload); err != nil {
-					_ = managed.Close()
+					managed.RollbackPlanStart(ext.previousManager)
 					return nil, nil, nil, err
 				}
 				prompt = payload.Prompt
@@ -331,22 +336,26 @@ func assembleLegacySnapshot(ctx context.Context, in legacyAssembly, generation u
 	} else if mgr != nil {
 		// Defensive: preflight already retires client-less managers, but a
 		// caller-owned Manager must never leak through assembly either way.
-		_ = mgr.Close()
+		mgr.RollbackPlanStart(ext.previousManager)
 		mgr = nil
 	}
 
 	b.WithSystemPrompt(prompt)
 	snap, runtimeSet, err := b.Build(ctx)
 	if err != nil {
-		if mgr != nil {
-			_ = mgr.Close()
-		}
+		rollbackStagedManager(mgr, ext.previousManager)
 		return nil, nil, nil, err
 	}
 	if postFreeze != nil {
 		postFreeze(snap)
 	}
 	return snap, runtimeSet, dispatcher, nil
+}
+
+func rollbackStagedManager(mgr, previous *sidecar.Manager) {
+	if mgr != nil {
+		mgr.RollbackPlanStart(previous)
+	}
 }
 
 // resolveReplacementClaims replays the kernel's slot-claim pass (see

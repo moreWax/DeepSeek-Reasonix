@@ -144,6 +144,16 @@ func TestSlashArgItems(t *testing.T) {
 	if !has(items, "auto") || !has(items, "disabled") || !has(items, "high") || !has(items, "max") || has(items, "off") {
 		t.Errorf("/effort should offer auto/disabled/high/max; got %v", labelsOf(items))
 	}
+	// /sptc runtime controls.
+	items, _ = SlashArgItems("/sptc ", data)
+	for _, want := range []string{"on", "off", "status"} {
+		if !has(items, want) {
+			t.Errorf("/sptc missing subcommand %q; got %v", want, labelsOf(items))
+		}
+	}
+	if items, _ := SlashArgItems("/sptc on ", data); len(items) != 0 {
+		t.Errorf("/sptc after a terminal subcommand should offer no suggestions; got %v", labelsOf(items))
+	}
 	// /goal
 	items, _ = SlashArgItems("/goal ", data)
 	if has(items, "--research") || has(items, "--simple") || !has(items, "status") || !has(items, "clear") {

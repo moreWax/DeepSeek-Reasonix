@@ -523,6 +523,111 @@ func TestBootOptionalRuntimeFailureDegradesToWarning(t *testing.T) {
 	}
 }
 
+// TestRebuildFromPluginEnablementTogglesSpeculation proves a live controller
+// can gain and lose the speculation strategy after persisted plugin changes.
+func TestRebuildFromPluginEnablementTogglesSpeculation(t *testing.T) {
+	isolateConfigHome(t)
+	dir := robustTempDir(t)
+	t.Chdir(dir)
+	writeRuntimeFixture(t, dir)
+	home := config.ReasonixHomeDir()
+	installBootFakePlugin(t, home, "spec-ptc", map[string]any{
+		"replaces": []string{"speculation"},
+		"env":      map[string]string{bootFakeEnvSpeculation: "1"},
+	})
+	if err := pluginpkg.SetEnabled(home, "spec-ptc", false); err != nil {
+		t.Fatal(err)
+	}
+
+	current, err := BuildRuntime(context.Background(), Options{})
+	if err != nil {
+		t.Fatalf("BuildRuntime: %v", err)
+	}
+	t.Cleanup(func() { current.Controller.Close() })
+	if got := current.Controller.SpeculationOwner(); got != "" {
+		t.Fatalf("disabled speculation owner = %q, want empty", got)
+	}
+
+	if err := pluginpkg.SetEnabled(home, "spec-ptc", true); err != nil {
+		t.Fatal(err)
+	}
+	enabled, err := RebuildFrom(context.Background(), current, Options{})
+	if err != nil {
+		t.Fatalf("enable RebuildFrom: %v", err)
+	}
+	if enabled.Controller != current.Controller {
+		t.Fatal("speculation-only enable replaced the session controller")
+	}
+	current = enabled
+	if got := current.Controller.SpeculationOwner(); got != "spec-ptc" {
+		t.Fatalf("enabled speculation owner = %q, want spec-ptc", got)
+	}
+	client := current.Extensions.Client("spec-ptc")
+	if client == nil {
+		t.Fatal("enabled sPTC sidecar has no live client")
+	}
+
+	if err := pluginpkg.SetEnabled(home, "spec-ptc", false); err != nil {
+		t.Fatal(err)
+	}
+	disabled, err := RebuildFrom(context.Background(), current, Options{})
+	if err != nil {
+		t.Fatalf("disable RebuildFrom: %v", err)
+	}
+	if disabled.Controller != current.Controller {
+		t.Fatal("speculation-only disable replaced the session controller")
+	}
+	current = disabled
+	if got := current.Controller.SpeculationOwner(); got != "" {
+		t.Fatalf("disabled speculation owner = %q, want empty", got)
+	}
+	waitForCond(t, "disabled sPTC sidecar exit", 10*time.Second, client.Exited)
+}
+
+func TestRebuildFromEnabledSpeculationClosesWithReusedController(t *testing.T) {
+	isolateConfigHome(t)
+	dir := robustTempDir(t)
+	t.Chdir(dir)
+	writeRuntimeFixture(t, dir)
+	home := config.ReasonixHomeDir()
+	installBootFakePlugin(t, home, "spec-ptc", map[string]any{
+		"replaces": []string{"speculation"},
+		"env":      map[string]string{bootFakeEnvSpeculation: "1"},
+	})
+	if err := pluginpkg.SetEnabled(home, "spec-ptc", false); err != nil {
+		t.Fatal(err)
+	}
+
+	initial, err := BuildRuntime(context.Background(), Options{})
+	if err != nil {
+		t.Fatalf("BuildRuntime: %v", err)
+	}
+	if err := pluginpkg.SetEnabled(home, "spec-ptc", true); err != nil {
+		initial.Controller.Close()
+		t.Fatal(err)
+	}
+	enabled, err := RebuildFrom(context.Background(), initial, Options{})
+	if err != nil {
+		initial.Controller.Close()
+		t.Fatalf("enable RebuildFrom: %v", err)
+	}
+	if enabled.Controller != initial.Controller {
+		enabled.Controller.Close()
+		t.Fatal("speculation-only enable replaced the session controller")
+	}
+	client := enabled.Extensions.Client("spec-ptc")
+	if client == nil {
+		enabled.Controller.Close()
+		t.Fatal("enabled sPTC sidecar has no live client")
+	}
+
+	enabled.Controller.Close()
+	waitForCond(t, "enabled sPTC sidecar exit on controller close", 10*time.Second, client.Exited)
+	if !enabled.Runtime.Closed() {
+		t.Fatal("reused controller close left the enabled generation runtime open")
+	}
+}
+
 // TestRebuildRetiresOldSidecars pins the Rebuild contract: the old
 // controller's Close retires its sidecars, while the replacement build's
 // sidecars keep serving their own generation.

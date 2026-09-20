@@ -46,6 +46,21 @@ func TestManagerDetachAdopt(t *testing.T) {
 	}
 }
 
+func TestAdoptAllRollbackRestoresPreviousManager(t *testing.T) {
+	previous := &Manager{clients: map[string]*Client{}}
+	client := &Client{pluginID: "keep"}
+	previous.clients["keep"] = client
+
+	next := adoptAll(previous)
+	if previous.Client("keep") != nil || next.Client("keep") != client {
+		t.Fatal("adoptAll did not transfer the client")
+	}
+	next.RollbackPlanStart(previous)
+	if previous.Client("keep") != client {
+		t.Fatal("no-op adoption rollback did not restore the previous manager")
+	}
+}
+
 func TestRollbackPlanStartReattachesOnlyAdopted(t *testing.T) {
 	// previous holds old "reloaded" client; new manager has fresh "reloaded" + adopted "keep".
 	prev := &Manager{clients: map[string]*Client{}}

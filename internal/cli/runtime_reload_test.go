@@ -14,7 +14,7 @@ import (
 // returns a fixed result (or error).
 func stubRuntimeRebuilder(res *boot.BuildResult, err error) (runtimeRebuilder, *int) {
 	calls := new(int)
-	return func(context.Context, controllerBuildSpec, *control.Controller) (*boot.BuildResult, error) {
+	return func(context.Context, runtimeRebuildSpec, *control.Controller) (*boot.BuildResult, error) {
 		*calls++
 		return res, err
 	}, calls
@@ -23,6 +23,19 @@ func stubRuntimeRebuilder(res *boot.BuildResult, err error) (runtimeRebuilder, *
 func reloadTestModel(ctrl control.SessionAPI, rebuild runtimeRebuilder) *chatTUI {
 	pending := []string{}
 	return &chatTUI{ctrl: ctrl, rebuildRuntime: rebuild, pendingCommit: &pending}
+}
+
+func TestReusableBuildResultMustBelongToActiveController(t *testing.T) {
+	active := newOwnedTestController(t, control.Options{Label: "active"})
+	stale := newOwnedTestController(t, control.Options{Label: "stale"})
+	result := &boot.BuildResult{Controller: stale}
+	if got := reusableBuildResult(result, active); got != nil {
+		t.Fatal("stale build result was reused for a different active controller")
+	}
+	result.Controller = active
+	if got := reusableBuildResult(result, active); got != result {
+		t.Fatal("active controller build result was not reused")
+	}
 }
 
 // TestReloadDispositionDecisionTable pins the /reload queue semantics: no
@@ -52,6 +65,25 @@ func TestReloadDispositionDecisionTable(t *testing.T) {
 	m.pendingApproval = &event.Approval{}
 	if got := m.reloadDisposition(); got != reloadQueued {
 		t.Fatalf("pending approval: reloadDisposition = %v, want reloadQueued", got)
+	}
+}
+
+func TestRunReloadCommandForcesFullRefresh(t *testing.T) {
+	oldCtrl := newOwnedTestController(t, control.Options{Label: "old"})
+	newCtrl := newOwnedTestController(t, control.Options{Label: "new"})
+	var gotSpec runtimeRebuildSpec
+	rebuilder := func(_ context.Context, spec runtimeRebuildSpec, _ *control.Controller) (*boot.BuildResult, error) {
+		gotSpec = spec
+		return &boot.BuildResult{Controller: newCtrl}, nil
+	}
+	m := reloadTestModel(oldCtrl, rebuilder)
+	cmd := m.runReloadCommand()
+	if cmd == nil {
+		t.Fatal("/reload did not schedule a rebuild")
+	}
+	_ = cmd()
+	if !gotSpec.forceFull {
+		t.Fatal("/reload did not force full runtime rediscovery")
 	}
 }
 

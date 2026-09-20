@@ -163,8 +163,12 @@ func rebuildWithPrevious(ctx context.Context, old *control.Controller, previous 
 	attachPlanAndStatus(res, fromGraph, toGraph, opts.Generation, previousSnapshot)
 
 	if err := migrateRuntimeState(res.Controller, old, m, opts.SessionCreateOptions); err != nil {
-		// Fail-atomic: release the replacement; old keeps serving.
+		// Fail-atomic: release the replacement; old keeps serving. Reattach
+		// unchanged sidecars before replacement cleanup closes its manager.
 		// Activation never reached Active publish.
+		if res.Extensions != nil && res.Extensions != opts.Extensions {
+			res.Extensions.RollbackPlanStart(opts.Extensions)
+		}
 		if res.Snapshot != nil {
 			res.Owner.Gate.BeginDrain(res.Snapshot.Generation())
 		}

@@ -15,6 +15,14 @@ import (
 	"reasonix/internal/provider"
 )
 
+type extensionPatchCheckpoint struct {
+	dispatcher   *dispatch.Dispatcher
+	resolver     provider.Resolver
+	ui           *uihub.Hub
+	uiSession    string
+	uiGeneration uint64
+}
+
 // tryRebuildSubgraph patches narrow plans without BuildRuntime (fail-atomic).
 // Callers must skip Close when BuildResult.ReusedController is set.
 func tryRebuildSubgraph(ctx context.Context, old *control.Controller, previous *BuildResult, opts Options, m runtimeMigration) (res *BuildResult, handled bool, err error) {
@@ -53,16 +61,18 @@ func tryRebuildSubgraph(ctx context.Context, old *control.Controller, previous *
 	plan.ToGeneration = gen
 	plan.Graph = to
 
-	// Checkpoint bindings for fail-atomic restore.
-	prevDispatcher := previous.Dispatcher
-	prevResolver := previous.ProviderResolver
-	prevUI := previous.ExtensionUI
-	prevUISession := controllerSessionID(previous.Controller)
-	prevUIGen := previous.Snapshot.Generation()
+	checkpoint := extensionPatchCheckpoint{
+		dispatcher:   previous.Dispatcher,
+		resolver:     previous.ProviderResolver,
+		ui:           previous.ExtensionUI,
+		uiSession:    controllerSessionID(previous.Controller),
+		uiGeneration: previous.Snapshot.Generation(),
+	}
 	res = &BuildResult{
 		Controller:           previous.Controller,
 		Snapshot:             previous.Snapshot.WithGeneration(gen),
 		Runtime:              extension.NewRuntimeSet(gen),
+		runtimeCleanup:       previous.runtimeCleanup,
 		Owner:                opts.Owner,
 		Extensions:           previous.Extensions,
 		Dispatcher:           previous.Dispatcher,
@@ -88,14 +98,7 @@ func tryRebuildSubgraph(ctx context.Context, old *control.Controller, previous *
 
 	oldMgr := previous.Extensions
 	fail := func(stageErr error) (*BuildResult, bool, error) {
-		// Restore controller to pre-patch bindings (no partial commit should remain).
-		restoreControllerBindings(previous.Controller, prevDispatcher, prevResolver, prevUI, prevUISession, prevUIGen, oldMgr)
-		if res.Runtime != nil {
-			_ = res.Runtime.Close()
-		}
-		if res.Extensions != nil && res.Extensions != oldMgr {
-			res.Extensions.RollbackPlanStart(oldMgr)
-		}
+		rollbackControllerExtensionPatch(previous.Controller, res, checkpoint, oldMgr)
 		return nil, true, stageErr
 	}
 
@@ -124,6 +127,10 @@ func tryRebuildSubgraph(ctx context.Context, old *control.Controller, previous *
 	if err := commitControllerExtPatch(res, session, gen); err != nil {
 		return fail(err)
 	}
+	if res.runtimeCleanup != nil && res.Runtime != nil {
+		runtimeSet := res.Runtime
+		res.runtimeCleanup.Add(func() { _ = runtimeSet.Close() })
+	}
 
 	_ = m
 	attachPlanAndStatus(res, from, to, opts.Generation, previous.Snapshot)
@@ -144,6 +151,17 @@ func tryRebuildSubgraph(ctx context.Context, old *control.Controller, previous *
 		extension.DefaultLifecycleMetrics.ObserveDrain(time.Since(drainStart))
 	}
 	return res, true, nil
+}
+
+func rollbackControllerExtensionPatch(ctrl *control.Controller, res *BuildResult, checkpoint extensionPatchCheckpoint, oldMgr *sidecar.Manager) {
+	restoreControllerBindings(ctrl, checkpoint.dispatcher, checkpoint.resolver, checkpoint.ui, checkpoint.uiSession, checkpoint.uiGeneration, oldMgr)
+	// Reattach adopted clients before closing the staged runtime's manager.
+	if res.Extensions != nil && res.Extensions != oldMgr {
+		res.Extensions.RollbackPlanStart(oldMgr)
+	}
+	if res.Runtime != nil {
+		_ = res.Runtime.Close()
+	}
 }
 
 func restoreControllerBindings(ctrl *control.Controller, disp *dispatch.Dispatcher, resolver provider.Resolver, ui *uihub.Hub, uiSession string, uiGen uint64, oldMgr *sidecar.Manager) {

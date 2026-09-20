@@ -322,6 +322,52 @@ func TestBootProviderConflictLeavesNoSidecarProcess(t *testing.T) {
 	waitForCond(t, "conflicted sidecar process exit", 10*time.Second, func() bool { return !pidAlive(pid) })
 }
 
+// TestBuildFailureAfterSidecarAdoptionRestoresOldRuntime proves a late build
+// error reattaches unchanged sidecars before retiring the failed generation.
+func TestBuildFailureAfterSidecarAdoptionRestoresOldRuntime(t *testing.T) {
+	isolateConfigHome(t)
+	dir := robustTempDir(t)
+	t.Chdir(dir)
+	writeRuntimeFixture(t, dir)
+	installBootFakePlugin(t, config.ReasonixHomeDir(), "stable", map[string]any{})
+
+	oldRes, err := BuildRuntime(context.Background(), Options{})
+	if err != nil {
+		t.Fatalf("BuildRuntime: %v", err)
+	}
+	t.Cleanup(oldRes.Controller.Close)
+	oldClient := oldRes.Extensions.Client("stable")
+	if oldClient == nil {
+		t.Fatal("first build has no sidecar client")
+	}
+
+	_, err = BuildRuntime(context.Background(), Options{
+		Model: "definitely-unknown-model",
+		RuntimeReload: RuntimeReload{
+			Extensions: oldRes.Extensions,
+			Graph:      oldRes.Plan.Graph,
+			Generation: oldRes.Snapshot.Generation(),
+			Owner:      oldRes.Owner,
+		},
+	})
+	if err == nil {
+		t.Fatal("replacement build unexpectedly succeeded")
+	}
+	if !errors.Is(err, ErrUnknownModel) {
+		t.Fatalf("replacement error = %v, want ErrUnknownModel", err)
+	}
+	if oldClient.Exited() {
+		t.Fatal("failed replacement killed the adopted old sidecar")
+	}
+	if got := oldRes.Extensions.Client("stable"); got != oldClient {
+		t.Fatal("failed replacement did not reattach the old sidecar")
+	}
+	result, interceptErr := oldClient.Intercept(context.Background(), protocol.EventSessionStart, json.RawMessage(`{}`), 5*time.Second)
+	if interceptErr != nil || result.Decision != protocol.DecisionContinue {
+		t.Fatalf("old sidecar after failed replacement = %+v, %v", result, interceptErr)
+	}
+}
+
 // TestRebuildPluginPreflightFailureKeepsOldRuntime pins reload atomicity with
 // extensions: a Rebuild whose NEW generation fails preflight (a newly
 // installed required plugin cannot start) returns the error and leaves the

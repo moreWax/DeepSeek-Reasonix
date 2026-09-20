@@ -12,7 +12,9 @@ import (
 )
 
 type routerSpeculationClient struct {
-	host extension.SpeculationHost
+	host    extension.SpeculationHost
+	crashed atomic.Bool
+	exited  atomic.Bool
 }
 
 func (*routerSpeculationClient) Intercept(context.Context, protocol.InterceptEvent, json.RawMessage, time.Duration) (protocol.InterceptResult, error) {
@@ -39,7 +41,11 @@ func (*routerSpeculationClient) CompleteSpeculation(context.Context, protocol.Sp
 func (*routerSpeculationClient) EndSpeculation(context.Context, protocol.SpeculationEndParams) (protocol.SpeculationEndResult, error) {
 	return protocol.SpeculationEndResult{}, nil
 }
-func (c *routerSpeculationClient) SetSpeculationHost(host extension.SpeculationHost) { c.host = host }
+func (c *routerSpeculationClient) SetSpeculationHost(host extension.SpeculationHost) {
+	c.host = host
+}
+func (c *routerSpeculationClient) Crashed() bool { return c.crashed.Load() }
+func (c *routerSpeculationClient) Exited() bool  { return c.exited.Load() }
 
 type routerHost struct {
 	starts atomic.Int32
@@ -51,6 +57,33 @@ func (h *routerHost) StartSpeculation(context.Context, protocol.HostSpeculationS
 }
 func (*routerHost) CancelSpeculation(context.Context, protocol.HostSpeculationCancelParams) (protocol.HostSpeculationCancelResult, error) {
 	return protocol.HostSpeculationCancelResult{Cancelled: true}, nil
+}
+
+func TestSpeculationOwnerRequiresLiveClient(t *testing.T) {
+	owner := map[extension.Slot]extension.ContributionSource{
+		extension.SlotSpeculation: {PluginID: "spec-ptc"},
+	}
+	withoutClient := New(nil, owner, func(string) Client { return nil }, nil, Options{})
+	if got := withoutClient.SpeculationOwner(); got != "" {
+		t.Fatalf("owner without live client = %q, want empty", got)
+	}
+	client := &routerSpeculationClient{}
+	withClient := New(nil, owner, func(string) Client { return client }, nil, Options{})
+	if got := withClient.SpeculationOwner(); got != "spec-ptc" {
+		t.Fatalf("live owner = %q, want spec-ptc", got)
+	}
+	client.crashed.Store(true)
+	if got := withClient.SpeculationOwner(); got != "" {
+		t.Fatalf("crashed owner = %q, want empty", got)
+	}
+	client.crashed.Store(false)
+	client.exited.Store(true)
+	if got := withClient.SpeculationOwner(); got != "" {
+		t.Fatalf("exited owner = %q, want empty", got)
+	}
+	if got := withClient.Speculation(); got != nil {
+		t.Fatal("exited speculation client remained available")
+	}
 }
 
 func TestSpeculationRoutesConcurrentAgentScopes(t *testing.T) {

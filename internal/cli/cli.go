@@ -1156,7 +1156,7 @@ func chatREPL(args []string, version string) int {
 		OnSessionRecovered: cliSessionRecoveredHandler(leases),
 	}
 	diagnostics.Milestone("controller_build_begin")
-	ctrl, err := setupProfileWithOverrides(ctx, *model, *maxSteps, false, sink, overrides)
+	initialBuild, err := setupProfileBuildResultWithOverrides(ctx, *model, *maxSteps, false, sink, overrides)
 	if err != nil && errors.Is(err, boot.ErrUnknownModel) && isInteractive() && config.SourcePath() == "" {
 		// True first run whose default model can't resolve: guide setup, then retry.
 		// With a config present, fall through to the descriptive error — re-running
@@ -1166,15 +1166,15 @@ func chatREPL(args []string, version string) int {
 			_ = cliReturnFailedTakeover(takeoverBinding, leases, takeoverManager)
 			return rc
 		}
-		ctrl, err = setupProfileWithOverrides(ctx, *model, *maxSteps, false, sink, overrides)
+		initialBuild, err = setupProfileBuildResultWithOverrides(ctx, *model, *maxSteps, false, sink, overrides)
 	}
 	if err != nil {
 		_ = cliReturnFailedTakeover(takeoverBinding, leases, takeoverManager)
 		fmt.Fprintln(os.Stderr, i18n.M.ErrorPrefix, err)
 		return 1
 	}
+	ctrl := initialBuild.Controller
 	diagnostics.Milestone("controller_build_done")
-
 	// Decide where this conversation's auto-save lands. A resume reuses the
 	// file so closing/reopening keeps appending to the same history; a fresh
 	// session lands in a new file stamped with the model name.
@@ -1285,7 +1285,7 @@ func chatREPL(args []string, version string) int {
 	// buildController so the replacement matches this session's launch wiring;
 	// the CLI holds no SharedHost, so each rebuild owns its plugin host.
 	overrides.EffortModel = ctrl.ModelRef()
-	m.bindRuntimeRebuilder(*maxSteps, sink, false, &overrides, cliProfileBuildOptions)
+	m.bindRuntimeRebuilder(initialBuild, *maxSteps, sink, false, &overrides, cliProfileBuildOptions)
 	if effortOverride != nil {
 		m.effortLevel = *effortOverride
 	}
