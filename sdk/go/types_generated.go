@@ -45,9 +45,16 @@ const (
 	MethodExtensionProviderStreamOpen   = "extension/provider/stream/open"
 	MethodExtensionResourcesChanged     = "extension/resources/changed"
 	MethodExtensionShutdown             = "extension/shutdown"
+	MethodExtensionSpeculationBegin     = "extension/speculation/begin"
+	MethodExtensionSpeculationClaim     = "extension/speculation/claim"
+	MethodExtensionSpeculationComplete  = "extension/speculation/complete"
+	MethodExtensionSpeculationEnd       = "extension/speculation/end"
+	MethodExtensionSpeculationObserve   = "extension/speculation/observe"
 	MethodExtensionUIAction             = "extension/ui/action"
 	MethodExtensionUISubmit             = "extension/ui/submit"
 	MethodHostContentRead               = "host/content/read"
+	MethodHostSpeculationCancel         = "host/speculation/cancel"
+	MethodHostSpeculationStart          = "host/speculation/start"
 	MethodHostUIPublish                 = "host/ui/publish"
 	MethodHostUIRequest                 = "host/ui/request"
 )
@@ -437,6 +444,100 @@ type ShutdownResult struct {
 	Accepted bool `json:"accepted"`
 }
 
+// SpeculationBeginParams is a generated Extension Protocol v2 wire DTO.
+type SpeculationBeginParams struct {
+	Scope SpeculationScope `json:"scope"`
+}
+
+// SpeculationScope is a generated Extension Protocol v2 wire DTO.
+type SpeculationScope struct {
+	Generation uint64 `json:"generation" validate:"min=1"`
+	SessionID  string `json:"sessionId" validate:"nonempty"`
+	TurnID     string `json:"turnId" validate:"nonempty"`
+	AttemptID  string `json:"attemptId" validate:"nonempty"`
+}
+
+// SpeculationBeginResult is a generated Extension Protocol v2 wire DTO.
+type SpeculationBeginResult struct {
+	Accepted bool   `json:"accepted"`
+	Reason   string `json:"reason,omitempty"`
+}
+
+// SpeculationClaimParams is a generated Extension Protocol v2 wire DTO.
+type SpeculationClaimParams struct {
+	Scope      SpeculationScope `json:"scope"`
+	BarrierSeq uint64           `json:"barrierSeq" validate:"min=0"`
+	Call       SpeculationCall  `json:"call"`
+}
+
+// SpeculationCall is a generated Extension Protocol v2 wire DTO.
+type SpeculationCall struct {
+	ID        string          `json:"id" validate:"nonempty"`
+	Name      string          `json:"name" validate:"nonempty"`
+	Arguments json.RawMessage `json:"arguments"`
+}
+
+// SpeculationClaimResult is a generated Extension Protocol v2 wire DTO.
+type SpeculationClaimResult struct {
+	Hit    bool   `json:"hit"`
+	Handle string `json:"handle,omitempty"`
+}
+
+// SpeculationCompleteParams is a generated Extension Protocol v2 wire DTO.
+type SpeculationCompleteParams struct {
+	Scope      SpeculationScope      `json:"scope"`
+	Handle     string                `json:"handle" validate:"nonempty"`
+	Completion SpeculationCompletion `json:"completion"`
+}
+
+// SpeculationCompletion is a generated Extension Protocol v2 string enum.
+type SpeculationCompletion string
+
+const (
+	SpeculationReady  SpeculationCompletion = "ready"
+	SpeculationFailed SpeculationCompletion = "failed"
+)
+
+// SpeculationCompleteResult is a generated Extension Protocol v2 wire DTO.
+type SpeculationCompleteResult struct {
+	Accepted bool `json:"accepted"`
+}
+
+// SpeculationEndParams is a generated Extension Protocol v2 wire DTO.
+type SpeculationEndParams struct {
+	Scope      SpeculationScope `json:"scope"`
+	BarrierSeq uint64           `json:"barrierSeq" validate:"min=0"`
+}
+
+// SpeculationEndResult is a generated Extension Protocol v2 wire DTO.
+type SpeculationEndResult struct {
+	Metrics SpeculationMetrics `json:"metrics"`
+}
+
+// SpeculationMetrics is a generated Extension Protocol v2 wire DTO.
+type SpeculationMetrics struct {
+	Dispatched    uint64 `json:"dispatched,omitempty"`
+	Hits          uint64 `json:"hits,omitempty"`
+	Misses        uint64 `json:"misses,omitempty"`
+	Evictions     uint64 `json:"evictions,omitempty"`
+	Rejected      uint64 `json:"rejected,omitempty"`
+	StartFailures uint64 `json:"startFailures,omitempty"`
+	Cancelled     uint64 `json:"cancelled,omitempty"`
+}
+
+// SpeculationObserveParams is a generated Extension Protocol v2 wire DTO.
+type SpeculationObserveParams struct {
+	Scope SpeculationScope `json:"scope"`
+	Seq   uint64           `json:"seq" validate:"min=1"`
+	Call  SpeculationCall  `json:"call"`
+}
+
+// SpeculationObserveResult is a generated Extension Protocol v2 wire DTO.
+type SpeculationObserveResult struct {
+	Accepted bool   `json:"accepted"`
+	Reason   string `json:"reason,omitempty"`
+}
+
 // UIActionParams is a generated Extension Protocol v2 wire DTO.
 type UIActionParams struct {
 	ActionID   string            `json:"actionId" validate:"nonempty"`
@@ -487,6 +588,31 @@ type ContentEncoding string
 const (
 	ContentUTF8 ContentEncoding = "utf8"
 )
+
+// HostSpeculationCancelParams is a generated Extension Protocol v2 wire DTO.
+type HostSpeculationCancelParams struct {
+	Scope  SpeculationScope `json:"scope"`
+	Handle string           `json:"handle" validate:"nonempty"`
+}
+
+// HostSpeculationCancelResult is a generated Extension Protocol v2 wire DTO.
+type HostSpeculationCancelResult struct {
+	Cancelled bool `json:"cancelled"`
+}
+
+// HostSpeculationStartParams is a generated Extension Protocol v2 wire DTO.
+type HostSpeculationStartParams struct {
+	Scope    SpeculationScope `json:"scope"`
+	Call     SpeculationCall  `json:"call"`
+	Reusable bool             `json:"reusable,omitempty"`
+}
+
+// HostSpeculationStartResult is a generated Extension Protocol v2 wire DTO.
+type HostSpeculationStartResult struct {
+	Accepted bool   `json:"accepted"`
+	Handle   string `json:"handle,omitempty"`
+	Reason   string `json:"reason,omitempty"`
+}
 
 // UIPublishParams is a generated Extension Protocol v2 wire DTO.
 type UIPublishParams struct {

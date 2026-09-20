@@ -333,6 +333,7 @@ var runtimeNamedSlots = map[string]bool{
 	"session_policy":    true,
 	"permission":        true,
 	"frontend_events":   true,
+	"speculation":       true,
 }
 
 var runtimeCapabilities = []string{"interceptors", "strategies", "providers", "ui"}

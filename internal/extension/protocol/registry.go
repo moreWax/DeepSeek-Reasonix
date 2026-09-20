@@ -26,6 +26,17 @@ const (
 	MethodExtensionProviderStreamChunk  Method = "extension/provider/stream/chunk"
 	MethodExtensionProviderStreamEnd    Method = "extension/provider/stream/end"
 
+	// Speculative tool execution. Turn/call/claim/complete/end run Host →
+	// Extension as acknowledged requests; start/cancel are Extension → Host
+	// requests so Reasonix remains the tool executor.
+	MethodExtensionSpeculationBegin    Method = "extension/speculation/begin"
+	MethodExtensionSpeculationObserve  Method = "extension/speculation/observe"
+	MethodExtensionSpeculationClaim    Method = "extension/speculation/claim"
+	MethodExtensionSpeculationComplete Method = "extension/speculation/complete"
+	MethodExtensionSpeculationEnd      Method = "extension/speculation/end"
+	MethodHostSpeculationStart         Method = "host/speculation/start"
+	MethodHostSpeculationCancel        Method = "host/speculation/cancel"
+
 	// UI. Action invocations and form submissions run Host → Extension;
 	// surfaces and blocking prompts are Extension → Host requests.
 	MethodExtensionUIAction Method = "extension/ui/action"
@@ -83,6 +94,13 @@ var frozenRegistry = []MethodSpec{
 	hostRequest[StreamCancelParams, StreamCancelResult](MethodExtensionProviderStreamCancel, ClassProvider),
 	extensionNotification[StreamChunkParams](MethodExtensionProviderStreamChunk, ClassProvider),
 	extensionNotification[StreamEndParams](MethodExtensionProviderStreamEnd, ClassProvider),
+	hostRequest[SpeculationBeginParams, SpeculationBeginResult](MethodExtensionSpeculationBegin, ClassSpeculation),
+	hostRequest[SpeculationObserveParams, SpeculationObserveResult](MethodExtensionSpeculationObserve, ClassSpeculation),
+	hostRequest[SpeculationClaimParams, SpeculationClaimResult](MethodExtensionSpeculationClaim, ClassSpeculation),
+	hostRequest[SpeculationCompleteParams, SpeculationCompleteResult](MethodExtensionSpeculationComplete, ClassSpeculation),
+	hostRequest[SpeculationEndParams, SpeculationEndResult](MethodExtensionSpeculationEnd, ClassSpeculation),
+	extensionRequest[HostSpeculationStartParams, HostSpeculationStartResult](MethodHostSpeculationStart, ClassSpeculation),
+	extensionRequest[HostSpeculationCancelParams, HostSpeculationCancelResult](MethodHostSpeculationCancel, ClassSpeculation),
 	hostRequest[UIActionParams, UIActionResult](MethodExtensionUIAction, ClassUI),
 	hostRequest[UISubmitParams, UISubmitResult](MethodExtensionUISubmit, ClassUI),
 	extensionRequest[UIPublishParams, UIPublishResult](MethodHostUIPublish, ClassUI),
@@ -190,12 +208,12 @@ func ValidateRegistry() error {
 			return fmt.Errorf("method %s has invalid direction %q", spec.Name, spec.Direction)
 		}
 	}
-	// Extension Protocol v2: 8 lifecycle/intercept/provider/UI Host →
-	// Extension requests, 3 Extension → Host requests (UI publish/request,
-	// content read), 3 Host → Extension notifications, 2 provider stream
-	// notifications.
-	if len(frozenRegistry) != 16 || hostReq != 8 || extReq != 3 || hostNotif != 3 || extNotif != 2 {
-		return fmt.Errorf("registry count = total=%d hostReq=%d extReq=%d hostNotif=%d extNotif=%d, want 16/8/3/3/2",
+	// Extension Protocol v2: 12 lifecycle/intercept/provider/speculation/UI
+	// Host → Extension requests, 5 Extension → Host requests (UI,
+	// content, speculation), 4 Host → Extension notifications, and 2 provider
+	// stream notifications.
+	if len(frozenRegistry) != 23 || hostReq != 13 || extReq != 5 || hostNotif != 3 || extNotif != 2 {
+		return fmt.Errorf("registry count = total=%d hostReq=%d extReq=%d hostNotif=%d extNotif=%d, want 23/13/5/3/2",
 			len(frozenRegistry), hostReq, extReq, hostNotif, extNotif)
 	}
 	return nil

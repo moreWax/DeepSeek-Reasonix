@@ -371,3 +371,28 @@ func TestHeadlessWorkspaceWriteAllowsInlineInterpreter(t *testing.T) {
 		t.Fatalf("script-file execution must be allowed in workspace-write: allow=%v reason=%q err=%v", allow, reason, err)
 	}
 }
+
+func TestSharedHeadlessGateUpdateWaitsForSpeculationLease(t *testing.T) {
+	gate := NewSharedHeadlessGate(permission.New("allow", nil, nil, nil), ToolApprovalYolo)
+	leased, release := gate.AcquireSpeculationGate()
+	allowed, ok := leased.(agent.SpeculationGate)
+	if !ok || !allowed.SpeculationAllowed("read_file", json.RawMessage(`{"path":"x"}`), true) {
+		t.Fatal("leased policy did not preserve initial speculation authorization")
+	}
+	updated := make(chan struct{})
+	go func() {
+		gate.Update(ToolApprovalDontAsk)
+		close(updated)
+	}()
+	select {
+	case <-updated:
+		t.Fatal("shared gate updated while speculation lease was active")
+	case <-time.After(30 * time.Millisecond):
+	}
+	release()
+	select {
+	case <-updated:
+	case <-time.After(time.Second):
+		t.Fatal("shared gate update did not resume after speculation lease release")
+	}
+}

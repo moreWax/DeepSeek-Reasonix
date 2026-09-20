@@ -147,6 +147,9 @@ type Options struct {
 	// Provider serves extension/provider/*; nil answers those methods with
 	// unknown_method.
 	Provider Provider
+	// Speculation serves extension/speculation/* and may call the host through
+	// SpeculationHost captured from a callback context.
+	Speculation SpeculationHandler
 	// UI serves extension/ui/action and extension/ui/submit.
 	UI UIHandler
 	// Shutdown runs on extension/shutdown, bounded by the host's
@@ -291,17 +294,7 @@ func Serve(ctx context.Context, h Handler, opts Options) error {
 	c.beforeRequest = s.gateRequest
 	c.beforeNotification = s.gateNotification
 
-	c.reqH[MethodExtensionInitialize] = s.withConnRequest(s.handleInitialize)
-	c.reqH[MethodExtensionShutdown] = s.withConnRequest(s.handleShutdown)
-	c.reqH[MethodExtensionIntercept] = s.withConnRequest(s.handleIntercept)
-	c.reqH[MethodExtensionProviderCatalog] = s.withConnRequest(s.handleProviderCatalog)
-	c.reqH[MethodExtensionProviderStreamOpen] = s.withConnRequest(s.handleStreamOpen)
-	c.reqH[MethodExtensionProviderStreamCancel] = s.withConnRequest(s.handleStreamCancel)
-	c.reqH[MethodExtensionUIAction] = s.withConnRequest(s.handleUIAction)
-	c.reqH[MethodExtensionUISubmit] = s.withConnRequest(s.handleUISubmit)
-	c.notH[MethodExtensionInitialized] = s.withConnNotification(s.handleInitialized)
-	c.notH[MethodExtensionEvent] = s.withConnNotification(s.handleEvent)
-	c.notH[MethodExtensionResourcesChanged] = s.withConnNotification(s.handleResourcesChanged)
+	s.registerHandlers(c)
 
 	return c.serve(ctx)
 }

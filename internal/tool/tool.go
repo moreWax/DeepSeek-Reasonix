@@ -34,6 +34,29 @@ type Tool interface {
 	ReadOnly() bool
 }
 
+// SpeculationPolicy is an argument-aware, explicit opt-in to execution before
+// the provider stream ends. Pure promises that Execute has no externally
+// observable effect and honors context cancellation. Deterministic allows one
+// completed execution to satisfy repeated identical calls.
+type SpeculationPolicy struct {
+	Pure          bool
+	Deterministic bool
+}
+
+// SpeculativeTool opts a tool into host-owned speculative execution. The host
+// still runs normal resolution, permission, and hook policy before adopting a
+// result; this method only authorizes starting the pure computation early.
+type SpeculativeTool interface {
+	Tool
+	SpeculationPolicy(json.RawMessage) (SpeculationPolicy, bool)
+}
+
+// SpeculativeReadValidator verifies that a previously captured ReadExecutor
+// result still represents the source that an ordinary dispatch would read now.
+type SpeculativeReadValidator interface {
+	ValidateSpeculativeRead(context.Context, json.RawMessage, ReadResultEnvelope) bool
+}
+
 // IsShellToolName reports current and compatibility names for the built-in
 // command shell. It keeps policy, evidence, and UI routing stable while Windows
 // exposes pwsh and older sessions continue to contain bash calls.

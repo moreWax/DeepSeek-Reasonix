@@ -157,6 +157,8 @@ type Client struct {
 	ui               UIHandler
 	streams          StreamRouter
 	streamsMu        sync.RWMutex
+	speculation      extension.SpeculationHost
+	speculationMu    sync.RWMutex
 	onCrash          func(error)
 	initResult       protocol.InitializeResult
 
@@ -210,6 +212,7 @@ func newClient(p *process, opts ClientOptions) *Client {
 	if streams == nil {
 		streams = dropStreamRouter{pluginID: p.pluginID}
 	}
+	speculation := extension.SpeculationHost(unavailableSpeculationHost{})
 	uiHost := opts.UIHostKind
 	if uiHost == "" {
 		uiHost = protocol.UIHostHeadless
@@ -239,6 +242,7 @@ func newClient(p *process, opts ClientOptions) *Client {
 		store:            NewStore(),
 		ui:               ui,
 		streams:          streams,
+		speculation:      speculation,
 		onCrash:          opts.OnCrash,
 		serveExited:      make(chan struct{}),
 	}
@@ -255,6 +259,8 @@ func newClient(p *process, opts ClientOptions) *Client {
 	c.conn.Handle(string(protocol.MethodHostContentRead), c.store.ReadHandler)
 	c.conn.Handle(string(protocol.MethodHostUIPublish), c.handleUIPublish)
 	c.conn.Handle(string(protocol.MethodHostUIRequest), c.handleUIRequest)
+	c.conn.Handle(string(protocol.MethodHostSpeculationStart), c.handleSpeculationStart)
+	c.conn.Handle(string(protocol.MethodHostSpeculationCancel), c.handleSpeculationCancel)
 	c.conn.HandleNotify(string(protocol.MethodExtensionProviderStreamChunk), c.handleStreamChunk)
 	c.conn.HandleNotify(string(protocol.MethodExtensionProviderStreamEnd), c.handleStreamEnd)
 	return c

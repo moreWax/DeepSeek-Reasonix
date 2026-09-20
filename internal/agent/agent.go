@@ -212,6 +212,19 @@ type Gate interface {
 	Check(ctx context.Context, toolName string, args json.RawMessage, readOnly bool) (allow bool, reason string, err error)
 }
 
+// SpeculationGate reports whether Check is guaranteed to allow a call without
+// prompting or invoking any user-controlled callback. Unknown gate
+// implementations are never eligible for pre-execution.
+type SpeculationGate interface {
+	SpeculationAllowed(toolName string, args json.RawMessage, readOnly bool) bool
+}
+
+// SpeculationGateLeaser lets a mutable gate pin the exact policy snapshot used
+// for preauthorization until speculative host execution has finished.
+type SpeculationGateLeaser interface {
+	AcquireSpeculationGate() (Gate, func())
+}
+
 // ExplicitDenyGate exposes the only global permission decision that applies to
 // an already-authorized MCP server. Installing or approving a server is the
 // user's authorization boundary; ordinary ask/fallback posture must not add a
@@ -279,6 +292,7 @@ type Agent struct {
 	// protocolRunSeq scopes provider-protocol recovery records across runs. It
 	// is unrelated to the retired Auto Guard execution gate.
 	protocolRunSeq atomic.Uint64
+	speculation    hostSpeculationRuntime
 
 	imageInput    agentImageInput
 	imageResolver ImageRequestResolver
@@ -1352,6 +1366,8 @@ func (a *Agent) streamWithFrozen(ctx context.Context, turn int, sink event.Sink,
 	if err != nil {
 		return streamedTurn{usage: provider.UsageWithRequestAttemptCount(ctx, nil), err: err}
 	}
+	speculation := a.openStreamSpeculation(ctx, turn, attemptID)
+	defer speculation.close()
 
 	// A PostLLMCall hook rewrites the whole reasoning block, so when one is wired
 	// up we buffer reasoning silently and emit the transformed text once after the
@@ -1445,6 +1461,7 @@ func (a *Agent) streamWithFrozen(ctx context.Context, turn int, sink event.Sink,
 				usage = provider.UsageWithRequestAttemptCount(ctx, usage)
 				// A clean terminal never reports partialToolStarted: the calls
 				// slice is now authoritative and the partial cards were merged.
+				settledSpeculation := speculation.retain(len(calls) > 0)
 				return streamedTurn{
 					displayReasoning: display,
 					text:             finalText, reasoning: finalReasoning, signature: finalSignature,
@@ -1452,7 +1469,7 @@ func (a *Agent) streamWithFrozen(ctx context.Context, turn int, sink event.Sink,
 					reasoningComplete: meta.complete,
 					reasoningState:    meta.state, thinkingBlocks: meta.blocks,
 					calls: calls, responsesItems: responsesItems, serverSearch: search.calls, usage: usage,
-					partialCalls: partialCalls, maxArgChars: maxArgChars,
+					partialCalls: partialCalls, maxArgChars: maxArgChars, speculation: settledSpeculation,
 				}
 			}
 			chunk = c
@@ -1496,13 +1513,7 @@ func (a *Agent) streamWithFrozen(ctx context.Context, turn int, sink event.Sink,
 			}
 		case provider.ChunkToolCall:
 			partialToolStarted = true
-			if chunk.ToolCall != nil {
-				calls = append(calls, *chunk.ToolCall)
-				partialCalls = upsertPartialToolCall(partialCalls, *chunk.ToolCall)
-				if n := len(chunk.ToolCall.Arguments); n > maxArgChars {
-					maxArgChars = n
-				}
-			}
+			calls, partialCalls, maxArgChars = speculation.completeCall(a, chunk, calls, partialCalls, maxArgChars)
 		case provider.ChunkResponsesItem:
 			responsesItems = meta.ingestResponsesItem(responsesItems, chunk.ResponsesItem, a.reasoningByteLimit)
 		case provider.ChunkServerSearch:

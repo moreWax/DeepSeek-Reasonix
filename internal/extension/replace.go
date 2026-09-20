@@ -21,6 +21,9 @@ const (
 	SlotSessionPolicy    Slot = "session_policy"
 	SlotPermission       Slot = "permission"
 	SlotFrontendEvents   Slot = "frontend_events"
+	// SlotSpeculation owns the one scheduler allowed to start and claim
+	// host-owned speculative tool executions for a runtime generation.
+	SlotSpeculation Slot = "speculation"
 )
 
 // namedSlots is the closed set of bare slot names ParseSlot accepts. The set
@@ -35,6 +38,7 @@ var namedSlots = map[Slot]bool{
 	SlotSessionPolicy:    true,
 	SlotPermission:       true,
 	SlotFrontendEvents:   true,
+	SlotSpeculation:      true,
 }
 
 const (

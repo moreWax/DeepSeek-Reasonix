@@ -10,8 +10,8 @@ func TestRegistryIsSortedAndPinned(t *testing.T) {
 		t.Fatalf("ValidateRegistry: %v", err)
 	}
 	registry := Registry()
-	if len(registry) != 16 {
-		t.Fatalf("registry has %d methods, want 16", len(registry))
+	if len(registry) != 23 {
+		t.Fatalf("registry has %d methods, want 23", len(registry))
 	}
 	for i := 1; i < len(registry); i++ {
 		if registry[i-1].Name >= registry[i].Name {
@@ -33,14 +33,21 @@ func TestRegistryMethodDirections(t *testing.T) {
 		MethodExtensionProviderStreamCancel: DirectionHostToExtensionRequest,
 		MethodExtensionProviderStreamChunk:  DirectionExtensionToHostNotification,
 		MethodExtensionProviderStreamEnd:    DirectionExtensionToHostNotification,
+		MethodExtensionSpeculationBegin:     DirectionHostToExtensionRequest,
+		MethodExtensionSpeculationObserve:   DirectionHostToExtensionRequest,
+		MethodExtensionSpeculationClaim:     DirectionHostToExtensionRequest,
+		MethodExtensionSpeculationComplete:  DirectionHostToExtensionRequest,
+		MethodExtensionSpeculationEnd:       DirectionHostToExtensionRequest,
+		MethodHostSpeculationStart:          DirectionExtensionToHostRequest,
+		MethodHostSpeculationCancel:         DirectionExtensionToHostRequest,
 		MethodExtensionUIAction:             DirectionHostToExtensionRequest,
 		MethodExtensionUISubmit:             DirectionHostToExtensionRequest,
 		MethodHostUIPublish:                 DirectionExtensionToHostRequest,
 		MethodHostUIRequest:                 DirectionExtensionToHostRequest,
 		MethodHostContentRead:               DirectionExtensionToHostRequest,
 	}
-	if len(want) != 16 {
-		t.Fatalf("test pins %d methods, want 16", len(want))
+	if len(want) != 23 {
+		t.Fatalf("test pins %d methods, want 23", len(want))
 	}
 	for method, direction := range want {
 		spec, ok := LookupMethod(method)
@@ -72,6 +79,13 @@ func TestRegistryClasses(t *testing.T) {
 		MethodExtensionProviderStreamCancel: ClassProvider,
 		MethodExtensionProviderStreamChunk:  ClassProvider,
 		MethodExtensionProviderStreamEnd:    ClassProvider,
+		MethodExtensionSpeculationBegin:     ClassSpeculation,
+		MethodExtensionSpeculationObserve:   ClassSpeculation,
+		MethodExtensionSpeculationClaim:     ClassSpeculation,
+		MethodExtensionSpeculationComplete:  ClassSpeculation,
+		MethodExtensionSpeculationEnd:       ClassSpeculation,
+		MethodHostSpeculationStart:          ClassSpeculation,
+		MethodHostSpeculationCancel:         ClassSpeculation,
 		MethodExtensionUIAction:             ClassUI,
 		MethodExtensionUISubmit:             ClassUI,
 		MethodHostUIPublish:                 ClassUI,

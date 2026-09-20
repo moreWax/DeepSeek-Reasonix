@@ -12,6 +12,7 @@ import (
 // toolCallPlan is the resolved, policy-checked state owned by one executeOne.
 type toolCallPlan struct {
 	call          provider.ToolCall
+	speculation   *speculationRound
 	tool          tool.Tool
 	canonicalName string
 	permName      string

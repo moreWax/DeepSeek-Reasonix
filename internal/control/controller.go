@@ -2254,6 +2254,10 @@ func (denyPermissionApprover) Approve(context.Context, string, string, json.RawM
 	return false, false, nil
 }
 
+func (denyPermissionApprover) SpeculationPreapproved(string, string, json.RawMessage) bool {
+	return false
+}
+
 // rulesWithoutFreshHumanApproval drops any session-allow rule that targets a
 // tool requiring fresh human approval, so an explicit allowlist cannot bypass
 // the always-prompt contract for those tools.
@@ -5337,6 +5341,14 @@ func (g gateApprover) ApproveWithReason(ctx context.Context, tool, subject strin
 
 func (g gateApprover) ApproveWithPolicyReason(ctx context.Context, tool, subject string, args json.RawMessage, policyReason string) (bool, bool, string, error) {
 	return g.approveWithPolicyReason(ctx, tool, subject, args, policyReason)
+}
+
+func (g gateApprover) SpeculationPreapproved(tool, subject string, args json.RawMessage) bool {
+	if g.c == nil {
+		return false
+	}
+	subject = approvalDisplaySubject(tool, subject, args)
+	return g.c.approval.preApproved(tool, subject, args)
 }
 
 func (g gateApprover) approveWithPolicyReason(ctx context.Context, tool, subject string, args json.RawMessage, policyReason string) (bool, bool, string, error) {

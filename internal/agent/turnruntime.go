@@ -54,6 +54,10 @@ type turnRuntime struct {
 
 	phase phaseClock
 
+	// speculation is the provider round whose exact calls this tool batch may
+	// adopt. It is cleared after the batch or any earlier boundary stop.
+	speculation *speculationRound
+
 	// sessionContext is the content-free diagnostic for the snapshot selected
 	// before this real user turn. It is attached to Usage events only.
 	sessionContext turnContextDiagnostics

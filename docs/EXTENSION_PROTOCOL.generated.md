@@ -5,7 +5,7 @@
 - Protocol ID: `reasonix.extension.v2`
 - Protocol major: `2`
 - Schema: `internal/extension/protocol/schema.generated.json`
-- Schema hash: `sha256:ac99dbabd4f6e354c89aced778d8a83646e7a06345cc67d08bcb3faf73bb56f5`
+- Schema hash: `sha256:2d70fd62de0e69148e4f0f7fdb08d617b125ee1c63c0e0ba99d2ce0526b59ab1`
 
 Within major v2 only optional fields, new enum values, and new methods may
 be added; existing required fields, directions, limits, error reasons, and
@@ -26,9 +26,16 @@ semantics never change.
 | `extension/provider/stream/open` | `host_to_extension_request` | `provider` | `StreamOpenParams` | `StreamOpenResult` |
 | `extension/resources/changed` | `host_to_extension_notification` | `observation` | `ResourcesChangedParams` | `-` |
 | `extension/shutdown` | `host_to_extension_request` | `lifecycle` | `ShutdownParams` | `ShutdownResult` |
+| `extension/speculation/begin` | `host_to_extension_request` | `speculation` | `SpeculationBeginParams` | `SpeculationBeginResult` |
+| `extension/speculation/claim` | `host_to_extension_request` | `speculation` | `SpeculationClaimParams` | `SpeculationClaimResult` |
+| `extension/speculation/complete` | `host_to_extension_request` | `speculation` | `SpeculationCompleteParams` | `SpeculationCompleteResult` |
+| `extension/speculation/end` | `host_to_extension_request` | `speculation` | `SpeculationEndParams` | `SpeculationEndResult` |
+| `extension/speculation/observe` | `host_to_extension_request` | `speculation` | `SpeculationObserveParams` | `SpeculationObserveResult` |
 | `extension/ui/action` | `host_to_extension_request` | `ui` | `UIActionParams` | `UIActionResult` |
 | `extension/ui/submit` | `host_to_extension_request` | `ui` | `UISubmitParams` | `UISubmitResult` |
 | `host/content/read` | `extension_to_host_request` | `content` | `ContentReadParams` | `ContentReadResult` |
+| `host/speculation/cancel` | `extension_to_host_request` | `speculation` | `HostSpeculationCancelParams` | `HostSpeculationCancelResult` |
+| `host/speculation/start` | `extension_to_host_request` | `speculation` | `HostSpeculationStartParams` | `HostSpeculationStartResult` |
 | `host/ui/publish` | `extension_to_host_request` | `ui` | `UIPublishParams` | `UIPublishResult` |
 | `host/ui/request` | `extension_to_host_request` | `ui` | `UIRequestParams` | `UIRequestResult` |
 

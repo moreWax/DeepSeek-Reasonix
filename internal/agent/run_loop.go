@@ -40,6 +40,7 @@ type streamedTurn struct {
 	partialToolStarted bool
 	partialCalls       []provider.ToolCall
 	maxArgChars        int // peak streaming tool-arg size for failed-attempt estimates
+	speculation        *speculationRound
 	err                error
 }
 
@@ -160,8 +161,7 @@ func (a *Agent) beginRunTurn(ctx context.Context, input string, pinned pinnedRev
 // runToolLoop owns the main tool-round budget and dispatches each streamed
 // assistant turn into final-response or tool-round handling.
 func (a *Agent) runToolLoop(ctx context.Context, state *turnRuntime) (runErr error) {
-	releaseMCPListObserver := a.activateMCPListObserver()
-	defer releaseMCPListObserver()
+	defer a.activateSpeculativeToolLoop(state)()
 	ctx = a.withAgentContext(ctx)
 	truncatedRounds := 0
 	for step := 0; state.runMaxSteps <= 0 || step < state.runMaxSteps || state.graceRound; step++ {
@@ -200,6 +200,7 @@ func (a *Agent) runToolLoop(ctx context.Context, state *turnRuntime) (runErr err
 		// whole attempt lifecycle — stream retries must not rewrite session
 		// history mid-round, so the shape stays stable across body replays.
 		streamed := a.streamWithSamplingRecovery(ctx, step+1)
+		state.speculation = streamed.speculation
 		text, reasoning, calls, usage := streamed.text, streamed.reasoning, streamed.calls, streamed.usage
 		partialCalls, err := streamed.partialCalls, streamed.err
 		cacheDiagnostics := CompareShape(prevPrefixShape, prefixShape, usage, contentReasons)
@@ -246,6 +247,7 @@ func (a *Agent) runToolLoop(ctx context.Context, state *turnRuntime) (runErr err
 		a.publishCommittedSample(streamed)
 
 		if len(calls) == 0 {
+			a.clearTurnSpeculation(state)
 			cont, ferr := a.handleFinalResponse(ctx, state, text, reasoning, usage)
 			if !cont {
 				return ferr
@@ -254,6 +256,7 @@ func (a *Agent) runToolLoop(ctx context.Context, state *turnRuntime) (runErr err
 		}
 
 		if usage != nil && usage.FinishReason == "length" {
+			a.clearTurnSpeculation(state)
 			truncatedRounds++
 			if err := a.recordTruncatedToolResults(withMessageIdentity(ctx, streamed.messageID), calls); err != nil {
 				return err
@@ -379,6 +382,7 @@ func (a *Agent) handleFinalResponse(ctx context.Context, state *turnRuntime, tex
 // max-steps grace round. cont=true continues the tool loop; cont=false returns
 // err from Run.
 func (a *Agent) handleToolRound(ctx context.Context, state *turnRuntime, step int, text, reasoning string, calls []provider.ToolCall, usage *provider.Usage) (cont bool, err error) {
+	defer a.clearTurnSpeculation(state)
 	state.terminal.emptyFinalBlocks = 0
 	state.usedAnyTool = true
 
@@ -389,6 +393,7 @@ func (a *Agent) handleToolRound(ctx context.Context, state *turnRuntime, step in
 
 	// The phase pair around the batch is what makes the accounting mean its
 	// names: it bills this round's wait to the provider and the batch to tools.
+	a.sealTurnSpeculation(state)
 	a.emitTurnPhase(event.TurnPhaseChecking)
 	batch := a.executeBatch(ctx, state, calls)
 	a.emitTurnPhase(event.TurnPhaseWorking)

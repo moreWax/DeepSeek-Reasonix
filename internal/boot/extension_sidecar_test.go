@@ -68,6 +68,8 @@ const (
 	bootFakeEnvUIPublish       = "REASONIX_BOOT_FAKE_UI_PUBLISH"
 	bootFakeEnvPIDFile         = "REASONIX_BOOT_FAKE_PID_FILE"
 	bootFakeEnvExitImmediately = "REASONIX_BOOT_FAKE_EXIT_IMMEDIATELY"
+	bootFakeEnvSpeculation     = "REASONIX_BOOT_FAKE_SPECULATION"
+	bootFakeEnvSpeculationLog  = "REASONIX_BOOT_FAKE_SPECULATION_LOG"
 )
 
 // TestExtensionFakeSidecarHelperProcess is the re-exec entry point; it skips
@@ -101,9 +103,13 @@ func runBootFakeSidecar(stdin io.Reader, stdout io.Writer) {
 	providerDescriptor := func() string {
 		return fmt.Sprintf(`{"ref":%q,"displayName":"Boot Fake","model":"x","contextWindow":64000,"tools":true,"reasoning":true,"efforts":["low","high"],"defaultEffort":"low"}`, providerRef)
 	}
+	speculationMode := os.Getenv(bootFakeEnvSpeculation) == "1"
 	initResult := strings.TrimSpace(os.Getenv(bootFakeEnvInitResult))
 	if initResult == "" && providerMode {
 		initResult = fmt.Sprintf(`{"protocolVersion":"2","name":"boot-fake","version":"1.0.0","stateSchemaVersion":0,"providers":[%s]}`, providerDescriptor())
+	}
+	if initResult == "" && speculationMode {
+		initResult = `{"protocolVersion":"2","name":"boot-fake","version":"1.0.0","stateSchemaVersion":0,"replaces":["speculation"]}`
 	}
 	if initResult == "" {
 		initResult = `{"protocolVersion":"2","name":"boot-fake","version":"1.0.0","stateSchemaVersion":0}`
@@ -131,6 +137,13 @@ func runBootFakeSidecar(stdin io.Reader, stdout io.Writer) {
 	}
 
 	in := bufio.NewReader(stdin)
+	var speculationHandle string
+	logSpeculation := func(raw []byte) {
+		path := strings.TrimSpace(os.Getenv(bootFakeEnvSpeculationLog))
+		if path != "" {
+			_ = os.WriteFile(path, raw, 0o644)
+		}
+	}
 	var sessionID string
 	var generation uint64
 	uiPublish := os.Getenv(bootFakeEnvUIPublish) == "1"
@@ -141,6 +154,7 @@ func runBootFakeSidecar(stdin io.Reader, stdout io.Writer) {
 				ID     json.RawMessage `json:"id"`
 				Method string          `json:"method"`
 				Params json.RawMessage `json:"params"`
+				Result json.RawMessage `json:"result"`
 			}
 			if json.Unmarshal(line, &frame) == nil && frame.Method != "" {
 				var result string
@@ -188,6 +202,48 @@ func runBootFakeSidecar(stdin io.Reader, stdout io.Writer) {
 					continue
 				case "extension/provider/stream/cancel":
 					result = `{"cancelled":true}`
+				case "extension/speculation/begin":
+					result = `{"accepted":true}`
+				case "extension/speculation/observe":
+					var observed protocol.SpeculationObserveParams
+					_ = json.Unmarshal(frame.Params, &observed)
+					startParams, _ := json.Marshal(protocol.HostSpeculationStartParams{
+						Scope: observed.Scope, Call: observed.Call,
+					})
+					write(`{"jsonrpc":"2.0","id":77002,"method":"host/speculation/start","params":%s}`, string(startParams))
+					for {
+						reverseLine, reverseErr := in.ReadBytes('\n')
+						if reverseErr != nil {
+							return
+						}
+						var reverse struct {
+							ID     json.RawMessage `json:"id"`
+							Method string          `json:"method"`
+							Result json.RawMessage `json:"result"`
+						}
+						if json.Unmarshal(reverseLine, &reverse) != nil {
+							continue
+						}
+						if string(reverse.ID) != "77002" {
+							continue
+						}
+						var started protocol.HostSpeculationStartResult
+						_ = json.Unmarshal(reverse.Result, &started)
+						speculationHandle = started.Handle
+						logSpeculation(reverse.Result)
+						break
+					}
+					result = `{"accepted":true}`
+				case "extension/speculation/claim":
+					if speculationHandle == "" {
+						result = `{"hit":false}`
+					} else {
+						result = fmt.Sprintf(`{"hit":true,"handle":%q}`, speculationHandle)
+					}
+				case "extension/speculation/complete":
+					result = `{"accepted":true}`
+				case "extension/speculation/end":
+					result = `{"metrics":{"dispatched":1,"hits":1}}`
 				case "extension/shutdown":
 					if ignoreShutdown {
 						continue

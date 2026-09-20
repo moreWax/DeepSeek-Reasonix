@@ -41,6 +41,19 @@ type Client interface {
 	TryNotifyEvent(event protocol.InterceptEvent, payload json.RawMessage) error
 }
 
+// SpeculationClient is implemented by the single speculation-slot owner's
+// sidecar. It remains optional so ordinary interceptor test doubles and
+// runtimes pay no interface or dispatch cost.
+type SpeculationClient interface {
+	SpeculationContext() protocol.SessionContext
+	BeginSpeculation(context.Context, protocol.SpeculationBeginParams) (protocol.SpeculationBeginResult, error)
+	ObserveSpeculation(context.Context, protocol.SpeculationObserveParams) (protocol.SpeculationObserveResult, error)
+	ClaimSpeculation(context.Context, protocol.SpeculationClaimParams) (protocol.SpeculationClaimResult, error)
+	CompleteSpeculation(context.Context, protocol.SpeculationCompleteParams) (protocol.SpeculationCompleteResult, error)
+	EndSpeculation(context.Context, protocol.SpeculationEndParams) (protocol.SpeculationEndResult, error)
+	SetSpeculationHost(extension.SpeculationHost)
+}
+
 // Options configures a Dispatcher.
 type Options struct {
 	// Warn receives human-readable warnings about optional-extension failures
@@ -119,10 +132,9 @@ func (e *BlockError) Error() string {
 	return fmt.Sprintf("extension %s blocked %s: %s", e.Plugin, e.Point, e.Reason)
 }
 
-// Dispatcher applies the frozen interceptor chain to live payloads. It is
-// immutable after New — every map and slice is deep-copied at construction —
-// so concurrent turns may dispatch through one Dispatcher without locking.
-// The single exception is the warn-once dedup set, guarded by warnedMu.
+// Dispatcher applies the frozen interceptor chain to live payloads. Its routing
+// maps are immutable after New; the speculation scope table is the sole dynamic
+// state besides warn-once dedup and is mutex-guarded for concurrent agents.
 type Dispatcher struct {
 	chain        map[extension.InterceptorPoint][]extension.Contribution
 	replacements map[extension.Slot]extension.ContributionSource
@@ -133,6 +145,9 @@ type Dispatcher struct {
 
 	warnedMu sync.Mutex
 	warned   map[string]struct{}
+
+	speculationMu    sync.RWMutex
+	speculationHosts map[protocol.SpeculationScope]extension.SpeculationHost
 }
 
 // New freezes the dispatch inputs into a Dispatcher. chain is the snapshot's
@@ -155,15 +170,99 @@ func New(chain map[extension.InterceptorPoint][]extension.Contribution, replacem
 			slotOwners[owner.PluginID] = true
 		}
 	}
-	return &Dispatcher{
-		chain:        frozenChain,
-		replacements: maps.Clone(replacements),
-		clients:      clients,
-		required:     frozenRequired,
-		slotOwners:   slotOwners,
-		warn:         opts.warnFunc(),
-		warned:       map[string]struct{}{},
+	d := &Dispatcher{
+		chain:            frozenChain,
+		replacements:     maps.Clone(replacements),
+		clients:          clients,
+		required:         frozenRequired,
+		slotOwners:       slotOwners,
+		warn:             opts.warnFunc(),
+		warned:           map[string]struct{}{},
+		speculationHosts: make(map[protocol.SpeculationScope]extension.SpeculationHost),
 	}
+	if client := d.Speculation(); client != nil {
+		client.SetSpeculationHost(d)
+	}
+	return d
+}
+
+// HasInterceptors reports whether a policy-relevant point has any configured
+// contributor in this immutable snapshot.
+func (d *Dispatcher) HasInterceptors(point extension.InterceptorPoint) bool {
+	return d != nil && len(d.chain[point]) > 0
+}
+
+// HasReplacement reports whether this immutable snapshot has an owner for slot.
+func (d *Dispatcher) HasReplacement(slot extension.Slot) bool {
+	if d == nil {
+		return false
+	}
+	owner, ok := d.replacements[slot]
+	return ok && owner.PluginID != ""
+}
+
+// Speculation returns the single speculation-slot owner, if its live client
+// implements the dedicated protocol methods.
+func (d *Dispatcher) Speculation() SpeculationClient {
+	if d == nil {
+		return nil
+	}
+	owner, ok := d.replacements[extension.SlotSpeculation]
+	if !ok || owner.PluginID == "" || d.clients == nil {
+		return nil
+	}
+	client, _ := d.clients(owner.PluginID).(SpeculationClient)
+	return client
+}
+
+// RegisterSpeculationScope routes reverse start/cancel requests to the agent
+// that opened this exact generation/session/turn/attempt scope.
+func (d *Dispatcher) RegisterSpeculationScope(scope protocol.SpeculationScope, host extension.SpeculationHost) bool {
+	if d == nil || host == nil || d.Speculation() == nil {
+		return false
+	}
+	d.speculationMu.Lock()
+	defer d.speculationMu.Unlock()
+	if _, exists := d.speculationHosts[scope]; exists {
+		return false
+	}
+	d.speculationHosts[scope] = host
+	return true
+}
+
+// UnregisterSpeculationScope fences all later reverse requests for scope.
+func (d *Dispatcher) UnregisterSpeculationScope(scope protocol.SpeculationScope) {
+	if d == nil {
+		return
+	}
+	d.speculationMu.Lock()
+	delete(d.speculationHosts, scope)
+	d.speculationMu.Unlock()
+}
+
+func (d *Dispatcher) speculationHost(scope protocol.SpeculationScope) extension.SpeculationHost {
+	d.speculationMu.RLock()
+	host := d.speculationHosts[scope]
+	d.speculationMu.RUnlock()
+	return host
+}
+
+// StartSpeculation implements extension.SpeculationHost as a scope router.
+func (d *Dispatcher) StartSpeculation(ctx context.Context, params protocol.HostSpeculationStartParams) (protocol.HostSpeculationStartResult, error) {
+	host := d.speculationHost(params.Scope)
+	if host == nil {
+		return protocol.HostSpeculationStartResult{Reason: "stale or unknown speculation scope"}, nil
+	}
+	return host.StartSpeculation(ctx, params)
+}
+
+// CancelSpeculation implements extension.SpeculationHost as a scope router.
+func (d *Dispatcher) CancelSpeculation(ctx context.Context, params protocol.HostSpeculationCancelParams) (protocol.HostSpeculationCancelResult, error) {
+	host := d.speculationHost(params.Scope)
+	if host == nil {
+		return protocol.HostSpeculationCancelResult{}, nil
+	}
+	return host.CancelSpeculation(ctx, params)
 }
 
 // Intercept walks the chain for point in frozen order, calling each

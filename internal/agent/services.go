@@ -110,6 +110,22 @@ func (s *agentServices) gateSnapshot() Gate {
 	return s.gate
 }
 
+// acquireGateSnapshot pins the active permission gate until release. Speculative
+// reads hold this lease only across their bounded pure Execute call so a
+// concurrent permission-mode replacement cannot revoke authorization mid-read.
+func (s *agentServices) acquireGateSnapshot() (Gate, func()) {
+	s.gateMu.RLock()
+	gate := s.gate
+	if leaser, ok := gate.(SpeculationGateLeaser); ok {
+		leased, releaseInner := leaser.AcquireSpeculationGate()
+		return leased, func() {
+			releaseInner()
+			s.gateMu.RUnlock()
+		}
+	}
+	return gate, s.gateMu.RUnlock
+}
+
 func (s *agentServices) setGate(g Gate) {
 	s.gateMu.Lock()
 	s.gate = g

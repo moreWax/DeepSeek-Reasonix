@@ -110,6 +110,44 @@ var methodFixtures = map[Method]struct {
 	MethodExtensionProviderStreamEnd: {
 		params: StreamEndParams{StreamID: "st-1", LastSeq: 9, Error: "", Interrupted: true},
 	},
+	MethodExtensionSpeculationBegin: {
+		params: SpeculationBeginParams{Scope: speculationFixtureScope()},
+		result: SpeculationBeginResult{Accepted: true},
+	},
+	MethodExtensionSpeculationObserve: {
+		params: SpeculationObserveParams{
+			Scope: speculationFixtureScope(), Seq: 1,
+			Call: SpeculationCall{ID: "call-1", Name: "query", Arguments: json.RawMessage(`{"prompt":"x"}`)},
+		},
+		result: SpeculationObserveResult{Accepted: true},
+	},
+	MethodExtensionSpeculationClaim: {
+		params: SpeculationClaimParams{
+			Scope: speculationFixtureScope(), BarrierSeq: 1,
+			Call: SpeculationCall{ID: "call-1", Name: "query", Arguments: json.RawMessage(`{"prompt":"x"}`)},
+		},
+		result: SpeculationClaimResult{Hit: true, Handle: "spec-1"},
+	},
+	MethodExtensionSpeculationComplete: {
+		params: SpeculationCompleteParams{Scope: speculationFixtureScope(), Handle: "spec-1", Completion: SpeculationReady},
+		result: SpeculationCompleteResult{Accepted: true},
+	},
+	MethodExtensionSpeculationEnd: {
+		params: SpeculationEndParams{Scope: speculationFixtureScope(), BarrierSeq: 1},
+		result: SpeculationEndResult{Metrics: SpeculationMetrics{Dispatched: 1, Hits: 1}},
+	},
+	MethodHostSpeculationStart: {
+		params: HostSpeculationStartParams{
+			Scope:    speculationFixtureScope(),
+			Call:     SpeculationCall{ID: "call-1", Name: "query", Arguments: json.RawMessage(`{"prompt":"x"}`)},
+			Reusable: true,
+		},
+		result: HostSpeculationStartResult{Accepted: true, Handle: "spec-1"},
+	},
+	MethodHostSpeculationCancel: {
+		params: HostSpeculationCancelParams{Scope: speculationFixtureScope(), Handle: "spec-1"},
+		result: HostSpeculationCancelResult{Cancelled: true},
+	},
 	MethodExtensionUIAction: {
 		params: UIActionParams{
 			ActionID: "acme.refresh", SessionID: "s-1", Generation: 3,
@@ -149,6 +187,10 @@ var methodFixtures = map[Method]struct {
 			Encoding: ContentUTF8,
 		},
 	},
+}
+
+func speculationFixtureScope() SpeculationScope {
+	return SpeculationScope{Generation: 3, SessionID: "s-1", TurnID: "turn-1", AttemptID: "attempt-1"}
 }
 
 func floatPtr(v float64) *float64 { return &v }

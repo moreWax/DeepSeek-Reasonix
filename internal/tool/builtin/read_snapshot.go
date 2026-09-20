@@ -30,6 +30,32 @@ func (r readFile) ResolveReadPath(args json.RawMessage) (string, error) {
 	return resolveReadablePath(r.workDir, p.Path, r.paths).Path, nil
 }
 
+func (r readFile) ValidateSpeculativeRead(ctx context.Context, args json.RawMessage, env tool.ReadResultEnvelope) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+	p, err := parseReadFileParams(args)
+	if err != nil {
+		return false
+	}
+	rp := resolveReadablePath(r.workDir, p.Path, r.paths)
+	if env.Source.CanonicalPath != rp.Path {
+		return false
+	}
+	if content, ok := r.overlayText(ctx, rp); ok {
+		version := fileops.OverlayVersion(content)
+		return ctx.Err() == nil && env.Source.Kind == tool.ReadSourceOverlay && env.Source.Identity == string(version) &&
+			env.Source.Snapshot == tool.SourceSnapshot(tool.ReadSourceOverlay, rp.Path, string(version))
+	}
+	info, err := os.Stat(rp.Path)
+	if err != nil || info.IsDir() {
+		return false
+	}
+	_, version := fileops.DiskSnapshot(rp.Path, info)
+	return ctx.Err() == nil && version != "" && env.Source.Kind == tool.ReadSourceDisk && env.Source.Identity == string(version) &&
+		env.Source.Snapshot == tool.SourceSnapshot(tool.ReadSourceDisk, rp.Path, string(version))
+}
+
 func (r readFile) ExecuteRead(ctx context.Context, args json.RawMessage) (string, tool.ReadResultEnvelope, error) {
 	p, err := parseReadFileParams(args)
 	if err != nil {
@@ -54,7 +80,7 @@ func (r readFile) ExecuteRead(ctx context.Context, args json.RawMessage) (string
 		}
 	} else {
 		source.Kind = tool.ReadSourceDisk
-		f, openErr := os.Open(rp.Path)
+		f, openErr := openReadFile(rp.Path)
 		if openErr != nil {
 			if os.IsNotExist(openErr) {
 				store.ObserveAbsent(fileops.DiskTarget(rp.Path, nil))
@@ -69,6 +95,9 @@ func (r readFile) ExecuteRead(ctx context.Context, args json.RawMessage) (string
 		}
 		if before.IsDir() {
 			return "", tool.ReadResultEnvelope{}, fmt.Errorf("%s is a directory, not a file — use the ls tool to list it, or read a specific file inside it", rp.DisplayPath)
+		}
+		if !before.Mode().IsRegular() {
+			return "", tool.ReadResultEnvelope{}, fmt.Errorf("%s is not a regular file", rp.DisplayPath)
 		}
 		target, version := fileops.DiskHandleSnapshot(rp.Path, f, before)
 		source.Identity = string(version)

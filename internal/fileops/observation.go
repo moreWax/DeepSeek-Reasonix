@@ -68,6 +68,22 @@ func (s *Store) Clone() *Store {
 	return copy
 }
 
+// MergeFrom commits observations captured by an isolated speculative read.
+// Callers must validate the captured source immediately before merging.
+func (s *Store) MergeFrom(other *Store) {
+	if s == nil || other == nil || s == other {
+		return
+	}
+	other.mu.Lock()
+	items := maps.Clone(other.items)
+	paths := maps.Clone(other.paths)
+	other.mu.Unlock()
+	s.mu.Lock()
+	maps.Copy(s.items, items)
+	maps.Copy(s.paths, paths)
+	s.mu.Unlock()
+}
+
 func (s *Store) Get(target Target) Observation {
 	if s == nil {
 		return Observation{}

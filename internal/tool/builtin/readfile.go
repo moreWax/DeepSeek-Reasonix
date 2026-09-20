@@ -151,6 +151,19 @@ func (readFile) Schema() json.RawMessage {
 
 func (readFile) ReadOnly() bool { return true }
 
+func (r readFile) SpeculationPolicy(arguments json.RawMessage) (tool.SpeculationPolicy, bool) {
+	var continuity struct {
+		Cursor string `json:"cursor"`
+	}
+	if err := json.Unmarshal(arguments, &continuity); err != nil || strings.TrimSpace(continuity.Cursor) != "" || r.overlay != nil {
+		return tool.SpeculationPolicy{}, false
+	}
+	if _, err := parseReadFileParams(arguments); err != nil {
+		return tool.SpeculationPolicy{}, false
+	}
+	return tool.SpeculationPolicy{Pure: true}, true
+}
+
 // ReadEnvelope reports what one read_file call delivered. The source identity
 // comes from the store that actually served the content, the snapshot stays
 // constant across the pages of one logical read, and the window digest covers

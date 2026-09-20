@@ -26,7 +26,7 @@ import (
 func (a *Agent) executeOne(ctx context.Context, turn *turnRuntime, call provider.ToolCall) (out toolOutcome) {
 	defer func() { out.runState = outcomeRunState(out) }()
 	ctx = fileops.WithStore(withTurnState(a.withAgentContext(ctx), turn), a.fileObservations)
-	plan := &toolCallPlan{call: call}
+	plan := &toolCallPlan{call: call, speculation: turn.speculation}
 	defer func() {
 		out.evidenceSource = cloneEvidenceTarget(plan.expectedWriteSource)
 		out.readTaskID = plan.readTaskID
@@ -448,7 +448,7 @@ func (a *Agent) finishToolExecution(ctx context.Context, plan *toolCallPlan) too
 	if plan.verification && a.svc.sink != nil {
 		a.svc.sink.Emit(event.Event{Kind: event.ToolProgress, Tool: event.Tool{ID: call.ID, Verifying: true}})
 	}
-	result, images, execution, err = a.dispatchResolvedTool(cctx, plan)
+	result, images, execution, err = a.dispatchOrAdoptSpeculation(ctx, cctx, plan)
 	// tool.after: extensions rule on the executed result (success or error)
 	// before evidence, hooks, and recovery observation, so every downstreamconsumer sees the final
 	// (possiblyreplaced) outcome.
