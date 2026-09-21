@@ -1,0 +1,28 @@
+{
+  "apiVersion": "reasonix.io/plugin/v2",
+  "name": "spec-ptc",
+  "version": "0.2.0",
+  "description": "Combined RLM provider and streamed speculative PTC execution",
+  "repository": "https://github.com/esengine/DeepSeek-Reasonix",
+  "provides": [
+    {
+      "namespace": "plugin/spec-ptc",
+      "kind": "strategies",
+      "id": "speculation",
+      "version": "0.2.0"
+    },
+    {
+      "namespace": "plugin/spec-ptc",
+      "kind": "provider",
+      "id": "rlm",
+      "version": "0.2.0",
+      "schemaHash": "sha256:416af537aeb7edd2ff0b96fd2ecb385bc10f900e8b320292857c5279cb5bce50"
+    }
+  ],
+  "runtime": {
+    "command": "${REASONIX_PLUGIN_ROOT}/bin/reasonix-spec-ptc",
+    "required": false,
+    "replaces": ["speculation"],
+    "capabilities": ["strategies", "providers"]
+  }
+}

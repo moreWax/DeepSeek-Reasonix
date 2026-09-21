@@ -1,0 +1,694 @@
+package core
+
+import (
+	"encoding/json"
+	"testing"
+	"time"
+)
+
+func TestExecutionResult(t *testing.T) {
+	tests := []struct {
+		name     string
+		result   ExecutionResult
+		hasError bool
+	}{
+		{
+			name: "successful execution with stdout",
+			result: ExecutionResult{
+				Stdout:   "Hello, World!\n",
+				Stderr:   "",
+				Duration: 100 * time.Millisecond,
+			},
+			hasError: false,
+		},
+		{
+			name: "execution with stderr",
+			result: ExecutionResult{
+				Stdout:   "",
+				Stderr:   "error: undefined variable",
+				Duration: 50 * time.Millisecond,
+			},
+			hasError: true,
+		},
+		{
+			name: "execution with both stdout and stderr",
+			result: ExecutionResult{
+				Stdout:   "partial output",
+				Stderr:   "warning: something",
+				Duration: 200 * time.Millisecond,
+			},
+			hasError: true,
+		},
+		{
+			name: "empty execution",
+			result: ExecutionResult{
+				Stdout:   "",
+				Stderr:   "",
+				Duration: 0,
+			},
+			hasError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			hasError := tt.result.Stderr != ""
+			if hasError != tt.hasError {
+				t.Errorf("hasError = %v, want %v", hasError, tt.hasError)
+			}
+		})
+	}
+}
+
+func TestCodeBlock(t *testing.T) {
+	tests := []struct {
+		name  string
+		block CodeBlock
+	}{
+		{
+			name: "simple code block",
+			block: CodeBlock{
+				Code: "fmt.Println(1)",
+				Result: ExecutionResult{
+					Stdout:   "1\n",
+					Stderr:   "",
+					Duration: 10 * time.Millisecond,
+				},
+			},
+		},
+		{
+			name: "multi-line code block",
+			block: CodeBlock{
+				Code: "x := 1\ny := 2\nfmt.Println(x + y)",
+				Result: ExecutionResult{
+					Stdout:   "3\n",
+					Stderr:   "",
+					Duration: 15 * time.Millisecond,
+				},
+			},
+		},
+		{
+			name: "code block with error",
+			block: CodeBlock{
+				Code: "fmt.Println(undefinedVar)",
+				Result: ExecutionResult{
+					Stdout:   "",
+					Stderr:   "undefined: undefinedVar",
+					Duration: 5 * time.Millisecond,
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Verify the block has code
+			if tt.block.Code == "" {
+				t.Error("expected non-empty code")
+			}
+		})
+	}
+}
+
+func TestFinalAnswerType(t *testing.T) {
+	tests := []struct {
+		name     string
+		faType   FinalAnswerType
+		expected string
+	}{
+		{
+			name:     "direct type",
+			faType:   FinalTypeDirect,
+			expected: "FINAL",
+		},
+		{
+			name:     "variable type",
+			faType:   FinalTypeVariable,
+			expected: "FINAL_VAR",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if string(tt.faType) != tt.expected {
+				t.Errorf("FinalAnswerType = %q, want %q", string(tt.faType), tt.expected)
+			}
+		})
+	}
+}
+
+func TestFinalAnswer(t *testing.T) {
+	tests := []struct {
+		name    string
+		answer  FinalAnswer
+		isVar   bool
+		content string
+	}{
+		{
+			name: "direct final answer",
+			answer: FinalAnswer{
+				Type:    FinalTypeDirect,
+				Content: "42",
+			},
+			isVar:   false,
+			content: "42",
+		},
+		{
+			name: "variable final answer",
+			answer: FinalAnswer{
+				Type:    FinalTypeVariable,
+				Content: "answer",
+			},
+			isVar:   true,
+			content: "answer",
+		},
+		{
+			name: "complex direct answer",
+			answer: FinalAnswer{
+				Type:    FinalTypeDirect,
+				Content: "40% positive, 40% negative, 20% neutral",
+			},
+			isVar:   false,
+			content: "40% positive, 40% negative, 20% neutral",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			isVar := tt.answer.Type == FinalTypeVariable
+			if isVar != tt.isVar {
+				t.Errorf("isVar = %v, want %v", isVar, tt.isVar)
+			}
+			if tt.answer.Content != tt.content {
+				t.Errorf("Content = %q, want %q", tt.answer.Content, tt.content)
+			}
+		})
+	}
+}
+
+func TestIteration(t *testing.T) {
+	tests := []struct {
+		name      string
+		iteration Iteration
+		hasFinal  bool
+		numBlocks int
+	}{
+		{
+			name: "iteration without final answer",
+			iteration: Iteration{
+				Response: "Let me think about this...",
+				CodeBlocks: []CodeBlock{
+					{Code: "x := 1", Result: ExecutionResult{Stdout: ""}},
+				},
+				FinalAnswer: nil,
+				Duration:    500 * time.Millisecond,
+			},
+			hasFinal:  false,
+			numBlocks: 1,
+		},
+		{
+			name: "iteration with final answer",
+			iteration: Iteration{
+				Response:   "FINAL_VAR(answer)",
+				CodeBlocks: nil,
+				FinalAnswer: &FinalAnswer{
+					Type:    FinalTypeVariable,
+					Content: "answer",
+				},
+				Duration: 200 * time.Millisecond,
+			},
+			hasFinal:  true,
+			numBlocks: 0,
+		},
+		{
+			name: "iteration with multiple code blocks",
+			iteration: Iteration{
+				Response: "Running multiple calculations...",
+				CodeBlocks: []CodeBlock{
+					{Code: "a := 1", Result: ExecutionResult{Stdout: ""}},
+					{Code: "b := 2", Result: ExecutionResult{Stdout: ""}},
+					{Code: "fmt.Println(a+b)", Result: ExecutionResult{Stdout: "3\n"}},
+				},
+				FinalAnswer: nil,
+				Duration:    1 * time.Second,
+			},
+			hasFinal:  false,
+			numBlocks: 3,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			hasFinal := tt.iteration.FinalAnswer != nil
+			if hasFinal != tt.hasFinal {
+				t.Errorf("hasFinal = %v, want %v", hasFinal, tt.hasFinal)
+			}
+			if len(tt.iteration.CodeBlocks) != tt.numBlocks {
+				t.Errorf("numBlocks = %d, want %d", len(tt.iteration.CodeBlocks), tt.numBlocks)
+			}
+		})
+	}
+}
+
+func TestMessageJSON(t *testing.T) {
+	tests := []struct {
+		name    string
+		message Message
+	}{
+		{
+			name:    "system message",
+			message: Message{Role: "system", Content: "You are a helpful assistant."},
+		},
+		{
+			name:    "user message",
+			message: Message{Role: "user", Content: "What is 2+2?"},
+		},
+		{
+			name:    "assistant message",
+			message: Message{Role: "assistant", Content: "The answer is 4."},
+		},
+		{
+			name:    "message with special characters",
+			message: Message{Role: "user", Content: "What is `x := 1`?\n\"quoted\""},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Test JSON marshaling
+			data, err := json.Marshal(tt.message)
+			if err != nil {
+				t.Fatalf("failed to marshal: %v", err)
+			}
+
+			// Test JSON unmarshaling
+			var decoded Message
+			if err := json.Unmarshal(data, &decoded); err != nil {
+				t.Fatalf("failed to unmarshal: %v", err)
+			}
+
+			if decoded.Role != tt.message.Role {
+				t.Errorf("Role = %q, want %q", decoded.Role, tt.message.Role)
+			}
+			if decoded.Content != tt.message.Content {
+				t.Errorf("Content = %q, want %q", decoded.Content, tt.message.Content)
+			}
+		})
+	}
+}
+
+func TestUsageStats(t *testing.T) {
+	tests := []struct {
+		name  string
+		stats UsageStats
+	}{
+		{
+			name: "typical usage",
+			stats: UsageStats{
+				PromptTokens:     100,
+				CompletionTokens: 50,
+				TotalTokens:      150,
+			},
+		},
+		{
+			name: "zero usage",
+			stats: UsageStats{
+				PromptTokens:     0,
+				CompletionTokens: 0,
+				TotalTokens:      0,
+			},
+		},
+		{
+			name: "large usage",
+			stats: UsageStats{
+				PromptTokens:     100000,
+				CompletionTokens: 4096,
+				TotalTokens:      104096,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Verify fields are accessible and have expected values
+			if tt.stats.PromptTokens < 0 {
+				t.Errorf("PromptTokens should not be negative: %d", tt.stats.PromptTokens)
+			}
+			if tt.stats.CompletionTokens < 0 {
+				t.Errorf("CompletionTokens should not be negative: %d", tt.stats.CompletionTokens)
+			}
+		})
+	}
+}
+
+func TestCompletionResult(t *testing.T) {
+	tests := []struct {
+		name   string
+		result CompletionResult
+	}{
+		{
+			name: "successful completion",
+			result: CompletionResult{
+				Response:   "The answer is 42.",
+				Iterations: 3,
+				Duration:   2 * time.Second,
+				Usage: UsageStats{
+					PromptTokens:     500,
+					CompletionTokens: 100,
+					TotalTokens:      600,
+				},
+			},
+		},
+		{
+			name: "single iteration completion",
+			result: CompletionResult{
+				Response:   "Direct answer",
+				Iterations: 1,
+				Duration:   500 * time.Millisecond,
+				Usage:      UsageStats{},
+			},
+		},
+		{
+			name: "max iterations completion",
+			result: CompletionResult{
+				Response:   "Best guess after exhaustion",
+				Iterations: 30,
+				Duration:   60 * time.Second,
+				Usage: UsageStats{
+					PromptTokens:     10000,
+					CompletionTokens: 5000,
+					TotalTokens:      15000,
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.result.Response == "" {
+				t.Error("expected non-empty response")
+			}
+			if tt.result.Iterations < 1 {
+				t.Errorf("Iterations = %d, want >= 1", tt.result.Iterations)
+			}
+			if tt.result.Duration < 0 {
+				t.Errorf("Duration = %v, want >= 0", tt.result.Duration)
+			}
+		})
+	}
+}
+
+func TestFinalAnswerTypeConstants(t *testing.T) {
+	// Ensure constants have expected values and are distinct
+	if FinalTypeDirect == FinalTypeVariable {
+		t.Error("FinalTypeDirect and FinalTypeVariable should be different")
+	}
+
+	if FinalTypeDirect != "FINAL" {
+		t.Errorf("FinalTypeDirect = %q, want %q", FinalTypeDirect, "FINAL")
+	}
+
+	if FinalTypeVariable != "FINAL_VAR" {
+		t.Errorf("FinalTypeVariable = %q, want %q", FinalTypeVariable, "FINAL_VAR")
+	}
+}
+
+func TestMessageJSONFields(t *testing.T) {
+	msg := Message{Role: "user", Content: "test"}
+	data, _ := json.Marshal(msg)
+	jsonStr := string(data)
+
+	// Verify JSON field names
+	if !contains(jsonStr, `"role"`) {
+		t.Error("expected 'role' field in JSON")
+	}
+	if !contains(jsonStr, `"content"`) {
+		t.Error("expected 'content' field in JSON")
+	}
+}
+
+func TestNewRecursionContext(t *testing.T) {
+	tests := []struct {
+		name     string
+		maxDepth int
+	}{
+		{"max depth 1", 1},
+		{"max depth 3", 3},
+		{"max depth 10", 10},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := NewRecursionContext(tt.maxDepth)
+
+			if ctx == nil {
+				t.Fatal("expected non-nil RecursionContext")
+			}
+			if ctx.CurrentDepth != 0 {
+				t.Errorf("CurrentDepth = %d, want 0", ctx.CurrentDepth)
+			}
+			if ctx.MaxDepth != tt.maxDepth {
+				t.Errorf("MaxDepth = %d, want %d", ctx.MaxDepth, tt.maxDepth)
+			}
+			if ctx.ParentID != "" {
+				t.Errorf("ParentID = %q, want empty string", ctx.ParentID)
+			}
+			if ctx.TraceID != "" {
+				t.Errorf("TraceID = %q, want empty string", ctx.TraceID)
+			}
+		})
+	}
+}
+
+func TestRecursionContext_Child(t *testing.T) {
+	parent := NewRecursionContext(5)
+	parent.TraceID = "trace-abc-123"
+
+	child := parent.Child("parent-call-1")
+
+	if child == nil {
+		t.Fatal("expected non-nil child context")
+	}
+	if child.CurrentDepth != parent.CurrentDepth+1 {
+		t.Errorf("child.CurrentDepth = %d, want %d", child.CurrentDepth, parent.CurrentDepth+1)
+	}
+	if child.MaxDepth != parent.MaxDepth {
+		t.Errorf("child.MaxDepth = %d, want %d", child.MaxDepth, parent.MaxDepth)
+	}
+	if child.ParentID != "parent-call-1" {
+		t.Errorf("child.ParentID = %q, want %q", child.ParentID, "parent-call-1")
+	}
+	if child.TraceID != parent.TraceID {
+		t.Errorf("child.TraceID = %q, want %q (inherited from parent)", child.TraceID, parent.TraceID)
+	}
+}
+
+func TestRecursionContext_ChildChain(t *testing.T) {
+	// Test creating a chain of child contexts
+	root := NewRecursionContext(5)
+	root.TraceID = "trace-root"
+
+	level1 := root.Child("call-1")
+	level2 := level1.Child("call-2")
+	level3 := level2.Child("call-3")
+
+	if level1.CurrentDepth != 1 {
+		t.Errorf("level1.CurrentDepth = %d, want 1", level1.CurrentDepth)
+	}
+	if level2.CurrentDepth != 2 {
+		t.Errorf("level2.CurrentDepth = %d, want 2", level2.CurrentDepth)
+	}
+	if level3.CurrentDepth != 3 {
+		t.Errorf("level3.CurrentDepth = %d, want 3", level3.CurrentDepth)
+	}
+
+	// All should inherit the same TraceID
+	if level1.TraceID != root.TraceID || level2.TraceID != root.TraceID || level3.TraceID != root.TraceID {
+		t.Error("TraceID should be inherited through the chain")
+	}
+
+	// ParentIDs should be set correctly
+	if level2.ParentID != "call-2" {
+		t.Errorf("level2.ParentID = %q, want %q", level2.ParentID, "call-2")
+	}
+	if level3.ParentID != "call-3" {
+		t.Errorf("level3.ParentID = %q, want %q", level3.ParentID, "call-3")
+	}
+}
+
+func TestRecursionContext_CanRecurse(t *testing.T) {
+	tests := []struct {
+		name         string
+		currentDepth int
+		maxDepth     int
+		expected     bool
+	}{
+		{"at root, can recurse", 0, 2, true},
+		{"at depth 1 of 3, can recurse", 1, 3, true},
+		{"at max depth, cannot recurse", 2, 2, false},
+		{"beyond max depth, cannot recurse", 3, 2, false},
+		{"max depth 0, cannot recurse", 0, 0, false},
+		{"at depth 4 of 5, can recurse", 4, 5, true},
+		{"at depth 5 of 5, cannot recurse", 5, 5, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := &RecursionContext{
+				CurrentDepth: tt.currentDepth,
+				MaxDepth:     tt.maxDepth,
+			}
+
+			result := ctx.CanRecurse()
+			if result != tt.expected {
+				t.Errorf("CanRecurse() = %v, want %v", result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestDepthExceededError(t *testing.T) {
+	tests := []struct {
+		name         string
+		currentDepth int
+		maxDepth     int
+		prompt       string
+	}{
+		{
+			name:         "simple error",
+			currentDepth: 3,
+			maxDepth:     2,
+			prompt:       "test prompt",
+		},
+		{
+			name:         "long prompt truncated",
+			currentDepth: 5,
+			maxDepth:     3,
+			prompt:       "This is a very long prompt that should be truncated in the error message because it exceeds the maximum length allowed for display",
+		},
+		{
+			name:         "empty prompt",
+			currentDepth: 2,
+			maxDepth:     1,
+			prompt:       "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := &DepthExceededError{
+				CurrentDepth: tt.currentDepth,
+				MaxDepth:     tt.maxDepth,
+				Prompt:       tt.prompt,
+			}
+
+			errMsg := err.Error()
+
+			// Should contain depth information
+			if !contains(errMsg, "depth exceeded") {
+				t.Errorf("error message should contain 'depth exceeded': %s", errMsg)
+			}
+			if !contains(errMsg, "current=") {
+				t.Errorf("error message should contain 'current=': %s", errMsg)
+			}
+			if !contains(errMsg, "max=") {
+				t.Errorf("error message should contain 'max=': %s", errMsg)
+			}
+
+			// Long prompts should be truncated
+			if len(tt.prompt) > 50 && !contains(errMsg, "...") {
+				t.Errorf("long prompts should be truncated with '...': %s", errMsg)
+			}
+		})
+	}
+}
+
+func TestDepthExceededError_Implements_Error(t *testing.T) {
+	var err error = &DepthExceededError{
+		CurrentDepth: 1,
+		MaxDepth:     1,
+		Prompt:       "test",
+	}
+
+	if err.Error() == "" {
+		t.Error("Error() should return non-empty string")
+	}
+}
+
+func TestTruncate(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		maxLen   int
+		expected string
+	}{
+		{
+			name:     "short string unchanged",
+			input:    "hello",
+			maxLen:   10,
+			expected: "hello",
+		},
+		{
+			name:     "exact length unchanged",
+			input:    "hello",
+			maxLen:   5,
+			expected: "hello",
+		},
+		{
+			name:     "long string truncated",
+			input:    "hello world",
+			maxLen:   5,
+			expected: "hello...",
+		},
+		{
+			name:     "empty string",
+			input:    "",
+			maxLen:   5,
+			expected: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := Truncate(tt.input, tt.maxLen)
+			if result != tt.expected {
+				t.Errorf("Truncate() = %q, want %q", result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestRecursionContext_Immutability(t *testing.T) {
+	// Verify that creating a child doesn't modify the parent
+	parent := NewRecursionContext(5)
+	parent.TraceID = "parent-trace"
+	originalDepth := parent.CurrentDepth
+
+	child := parent.Child("child-call")
+
+	// Parent should be unchanged
+	if parent.CurrentDepth != originalDepth {
+		t.Errorf("parent.CurrentDepth was modified: got %d, want %d", parent.CurrentDepth, originalDepth)
+	}
+	if parent.ParentID != "" {
+		t.Errorf("parent.ParentID was modified: got %q, want empty", parent.ParentID)
+	}
+
+	// Child should have incremented depth
+	if child.CurrentDepth != originalDepth+1 {
+		t.Errorf("child.CurrentDepth = %d, want %d", child.CurrentDepth, originalDepth+1)
+	}
+}
+
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsHelper(s, substr))
+}
+
+func containsHelper(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}

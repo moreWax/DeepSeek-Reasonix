@@ -1,0 +1,6 @@
+github.com/XiaoConstantine/rlm-go v0.1.1-0.20260512202825-43905b967530 h1:2PDASccrFcS5e/tRbIPco28AmGqHNpRE385bK5HzoLs=
+github.com/XiaoConstantine/rlm-go v0.1.1-0.20260512202825-43905b967530/go.mod h1:mqgeEBHLzStPgSVWUpBQan4dA0i9HRATvRJaBaxIUoA=
+github.com/google/uuid v1.6.0 h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=
+github.com/google/uuid v1.6.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
+github.com/traefik/yaegi v0.16.1 h1:f1De3DVJqIDKmnasUF6MwmWv1dSEEat0wcpXhD2On3E=
+github.com/traefik/yaegi v0.16.1/go.mod h1:4eVhbPb3LnD2VigQjhYbEJ69vDRFdT2HQNrXx8eEwUY=
