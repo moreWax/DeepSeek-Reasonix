@@ -383,9 +383,15 @@ func (r *RLM) withRemainingTimeout(ctx context.Context, state *iterationState, c
 	return callCtx, cancel, nil
 }
 
-func (r *RLM) wrapCallError(err error, state *iterationState, completedIterations int) error {
+func (r *RLM) wrapCallError(ctx context.Context, err error, state *iterationState, completedIterations int) error {
 	if err == nil {
 		return nil
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+		return &CancellationError{
+			Cause:   ctxErr,
+			partial: state.buildPartialResult(),
+		}
 	}
 	if errors.Is(err, context.DeadlineExceeded) && r.config.MaxTimeout > 0 {
 		return &TimeoutExceededError{
@@ -981,7 +987,7 @@ func (r *RLM) Complete(ctx context.Context, contextPayload any, query string) (*
 		llmResp, err := r.completeWithOptionalStreaming(callCtx, currentMessages)
 		cancelCall()
 		if err != nil {
-			wrappedErr := r.wrapCallError(err, state, i)
+			wrappedErr := r.wrapCallError(ctx, err, state, i)
 			if wrappedErr != err {
 				return nil, wrappedErr
 			}
@@ -1007,10 +1013,19 @@ func (r *RLM) Complete(ctx context.Context, contextPayload any, query string) (*
 		r.logCacheStats(llmResp, state)
 		r.logf("Response: %s", truncate(response, truncateLenShort))
 
-		// Extract and execute code blocks
+		// Extract and execute code blocks under the same completion-wide wall clock.
 		codeBlocks := parsing.FindCodeBlocks(response)
 		clearFinalState(execEnv)
-		execResult := r.executeCodeBlocks(ctx, execEnv, codeBlocks, contextPayload)
+		execCtx, cancelExec, err := r.withRemainingTimeout(ctx, state, i)
+		if err != nil {
+			return nil, err
+		}
+		execResult := r.executeCodeBlocks(execCtx, execEnv, codeBlocks, contextPayload)
+		execErr := execCtx.Err()
+		cancelExec()
+		if execErr != nil {
+			return nil, r.wrapCallError(ctx, execErr, state, i)
+		}
 
 		// Get LLM calls made during code execution and aggregate tokens
 		llmCalls := execEnv.GetLLMCalls()
@@ -1345,9 +1360,18 @@ func (r *RLM) forceDefaultAnswer(ctx context.Context, messages []core.Message, s
 		Content: DefaultAnswerPrompt,
 	})
 
-	llmResp, err := r.client.Complete(ctx, messages)
+	callCtx, cancelCall, err := r.withRemainingTimeout(ctx, state, iterations)
 	if err != nil {
-		return nil, r.wrapCallError(fmt.Errorf("default answer: llm completion failed: %w", err), state, iterations)
+		return nil, err
+	}
+	llmResp, err := r.client.Complete(callCtx, messages)
+	callErr := callCtx.Err()
+	cancelCall()
+	if err != nil {
+		return nil, r.wrapCallError(ctx, fmt.Errorf("default answer: llm completion failed: %w", err), state, iterations)
+	}
+	if callErr != nil {
+		return nil, r.wrapCallError(ctx, callErr, state, iterations)
 	}
 
 	// Add tokens from this final call
@@ -1489,7 +1513,7 @@ func (r *RLM) CompleteWithRecursion(
 		llmResp, err := r.completeWithOptionalStreaming(callCtx, currentMessages)
 		cancelCall()
 		if err != nil {
-			wrappedErr := r.wrapCallError(err, state, i)
+			wrappedErr := r.wrapCallError(ctx, err, state, i)
 			if wrappedErr != err {
 				return nil, wrappedErr
 			}
@@ -1521,9 +1545,13 @@ func (r *RLM) CompleteWithRecursion(
 		codeBlocks := parsing.FindCodeBlocks(response)
 		var execResults []core.CodeBlock
 		clearFinalState(replEnv)
+		execCtx, cancelExec, err := r.withRemainingTimeout(ctx, state, i)
+		if err != nil {
+			return nil, err
+		}
 		for _, code := range codeBlocks {
 			r.logf("Executing code:\n%s", truncate(code, 200))
-			result, _ := replEnv.Execute(ctx, code)
+			result, _ := replEnv.Execute(execCtx, code)
 			execResults = append(execResults, core.CodeBlock{
 				Code:   code,
 				Result: *result,
@@ -1540,6 +1568,11 @@ func (r *RLM) CompleteWithRecursion(
 			if !supportsFinalState(replEnv) && parsing.FindFinalAnswer(sandbox.FormatExecutionResult(result)) != nil {
 				break
 			}
+		}
+		execErr := execCtx.Err()
+		cancelExec()
+		if execErr != nil {
+			return nil, r.wrapCallError(ctx, execErr, state, i)
 		}
 
 		replCalls := replEnv.GetLLMCalls()
@@ -2045,7 +2078,7 @@ func (r *RLM) CompleteWithCompactHistory(ctx context.Context, contextPayload any
 		llmResp, err := r.completeWithOptionalStreaming(callCtx, messages)
 		cancelCall()
 		if err != nil {
-			wrappedErr := r.wrapCallError(err, state, i)
+			wrappedErr := r.wrapCallError(ctx, err, state, i)
 			if wrappedErr != err {
 				return nil, wrappedErr
 			}
@@ -2071,10 +2104,19 @@ func (r *RLM) CompleteWithCompactHistory(ctx context.Context, contextPayload any
 		r.logCacheStats(llmResp, state)
 		r.logf("Response: %s", truncate(response, truncateLenShort))
 
-		// Extract and execute code blocks
+		// Extract and execute code blocks under the same completion-wide wall clock.
 		codeBlocks := parsing.FindCodeBlocks(response)
 		clearFinalState(execEnv)
-		execResult := r.executeCodeBlocks(ctx, execEnv, codeBlocks, contextPayload)
+		execCtx, cancelExec, err := r.withRemainingTimeout(ctx, state, i)
+		if err != nil {
+			return nil, err
+		}
+		execResult := r.executeCodeBlocks(execCtx, execEnv, codeBlocks, contextPayload)
+		execErr := execCtx.Err()
+		cancelExec()
+		if execErr != nil {
+			return nil, r.wrapCallError(ctx, execErr, state, i)
+		}
 
 		// Get LLM calls made during code execution and aggregate tokens
 		llmCalls := execEnv.GetLLMCalls()

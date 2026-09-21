@@ -23,13 +23,14 @@ The Python reference shadows partially generated Python programs. This extension
 | Cancellation and stale isolation | Scope-owned contexts, opaque handles, generation fencing, and call-ID-aware reservation rollback | `TestRetractDoesNotEvictReservedDeterministicClaim`, `TestRetractDuringReservationSurvivesRollbackAndReplacement`; engine cancellation, stale-scope, and concurrent cleanup tests |
 | Waste accounting | Ready but unclaimed work counted separately | `TestReadyUnclaimedExecutionIsCountedAsWaste` |
 | Observable status | Provider reasoning stream reports dispatch/hit/miss/waste/cancel metrics | `TestSpecPTCProviderStreamsReasoningFinalUsageAndDone` |
-| Constrained authoritative worker | Podman/Docker required; unsafe network profiles and direct generated-code network/IPC access rejected | `TestConstrainedSandboxRejectsUnsafeProfiles`, `TestGeneratedCodePolicyRejectsDirectNetworkAndIPC` |
+| Execution mode | Constrained Podman/Docker worker when available; automatic policy-checked local Yaegi fallback otherwise | `TestConstrainedSandboxRejectsUnsafeProfiles`, `TestGeneratedCodePolicyRejectsDirectNetworkAndIPC`, `TestLocalExecutionAutomaticallyFollowsContainerAvailability` |
+| Subscription transport | Existing Reasonix/Codex OAuth credential, private import/refresh, Codex Responses SSE, and `gpt-5.6-sol` default | `TestManagerImportsCodexCredentialPrivately`, `TestManagerRefreshesExpiredCredential`, `TestClientStreamsCodexResponseWithSubscriptionHeaders`, `TestDefaultRLMRootModelUsesExistingCodexSubscription` |
 
 ## Safety differences from the Python reference
 
 These are intentional safety adaptations, not semantic substitutions:
 
 - Unsupported or uncertain Go expressions are tainted instead of executed in the shadow planner.
-- Model-generated authoritative code runs in a container by default. The extension rejects `rlm-go`'s local sandbox fallback.
+- Model-generated authoritative code runs in the constrained container worker when Podman/Docker is available. Without either runtime, it automatically uses the local Yaegi REPL; this preserves usability but deliberately trades away OS isolation, as documented in `README.md`.
 - Native Reasonix tool speculation remains host-owned, so ordinary permission, hook, sandbox, and adoption checks still apply.
 - Every speculative failure, rejection, or miss falls open to the authoritative path.

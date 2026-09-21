@@ -4,20 +4,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"go/ast"
-	"go/parser"
+	"go/scanner"
 	"go/token"
-	"strings"
 
 	rlmcore "github.com/XiaoConstantine/rlm-go/pkg/core"
 	"github.com/XiaoConstantine/rlm-go/pkg/parsing"
 	rlmgo "github.com/XiaoConstantine/rlm-go/pkg/rlm"
 )
 
-// constrainedRootClient prevents streamed model statements from reaching the
-// networking primitives imported by rlm-go's container IPC prelude. Query APIs
-// remain the sole egress path and are fenced by the turn-local execution ID
-// enforced by rlm-go's IPC server.
+// constrainedRootClient prevents streamed model statements from importing new
+// capabilities or reaching private sandbox IPC primitives. Query APIs remain
+// the sole model egress path in both container and local execution modes.
 type constrainedRootClient struct {
 	client rlmgo.LLMClient
 }
@@ -84,27 +81,20 @@ func validateGeneratedCode(response string) error {
 }
 
 func validateGeneratedBlock(code string) error {
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, "generated.go", "package p\nfunc _(){\n"+code+"\n}\n", parser.AllErrors)
-	if err != nil {
-		// rlm-go will surface ordinary syntax errors as REPL feedback. Only a
-		// successfully parsed forbidden reference is a policy violation.
-		return nil
-	}
-	var forbidden string
-	ast.Inspect(file, func(node ast.Node) bool {
-		ident, ok := node.(*ast.Ident)
-		if !ok {
-			return true
+	var lexer scanner.Scanner
+	tokenFile := token.NewFileSet().AddFile("generated.go", -1, len(code))
+	lexer.Init(tokenFile, []byte(code), nil, scanner.ScanComments)
+	for {
+		_, kind, literal := lexer.Scan()
+		switch kind {
+		case token.IMPORT:
+			return errors.New("ptc: generated code may not import packages")
+		case token.IDENT:
+			if _, denied := forbiddenGeneratedIdentifiers[literal]; denied {
+				return fmt.Errorf("ptc: generated code references forbidden sandbox capability %q", literal)
+			}
+		case token.EOF:
+			return nil
 		}
-		if _, denied := forbiddenGeneratedIdentifiers[ident.Name]; denied {
-			forbidden = ident.Name
-			return false
-		}
-		return true
-	})
-	if forbidden != "" {
-		return fmt.Errorf("ptc: generated code references forbidden sandbox capability %q", strings.TrimSpace(forbidden))
 	}
-	return nil
 }

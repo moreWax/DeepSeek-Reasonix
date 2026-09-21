@@ -873,7 +873,7 @@ func (r *REPL) Execute(ctx context.Context, code string) (*core.ExecutionResult,
 			}
 		}()
 		// Execute the code (may call llmQuery which doesn't need lock)
-		_, evalErr = r.interp.Eval(code)
+		_, evalErr = r.interp.EvalWithContext(ctx, code)
 	}()
 
 	r.mu.Lock()

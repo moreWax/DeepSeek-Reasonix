@@ -529,6 +529,89 @@ func TestCompleteTimeoutExceeded(t *testing.T) {
 	}
 }
 
+func TestCompleteTimeoutInterruptsCodeExecution(t *testing.T) {
+	client := &mockLLMClient{
+		completeFunc: func(context.Context, []core.Message) (core.LLMResponse, error) {
+			return core.LLMResponse{Content: "```go\nfor {}\n```"}, nil
+		},
+	}
+	runtime := New(client, &mockREPLClient{},
+		WithMaxIterations(1),
+		WithMaxTimeout(50*time.Millisecond),
+	)
+	started := time.Now()
+	_, err := runtime.Complete(context.Background(), "test", "query")
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+	var timeoutErr *TimeoutExceededError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("expected TimeoutExceededError, got %T (%v)", err, err)
+	}
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("code timeout took %s", elapsed)
+	}
+}
+
+func TestCompleteCallerDeadlineIsNotReportedAsConfiguredTimeout(t *testing.T) {
+	client := &mockLLMClient{
+		completeFunc: func(context.Context, []core.Message) (core.LLMResponse, error) {
+			return core.LLMResponse{Content: "```go\nfor {}\n```"}, nil
+		},
+	}
+	runtime := New(client, &mockREPLClient{},
+		WithMaxIterations(1),
+		WithMaxTimeout(5*time.Second),
+	)
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	_, err := runtime.Complete(ctx, "test", "query")
+	if err == nil {
+		t.Fatal("expected cancellation error")
+	}
+	var cancellationErr *CancellationError
+	if !errors.As(err, &cancellationErr) {
+		t.Fatalf("expected CancellationError, got %T (%v)", err, err)
+	}
+	var timeoutErr *TimeoutExceededError
+	if errors.As(err, &timeoutErr) {
+		t.Fatalf("caller deadline was reported as configured timeout: %v", err)
+	}
+}
+
+func TestCompleteTimeoutBoundsForcedDefaultAnswer(t *testing.T) {
+	callCount := 0
+	client := &mockLLMClient{
+		completeFunc: func(ctx context.Context, _ []core.Message) (core.LLMResponse, error) {
+			callCount++
+			if callCount == 1 {
+				return core.LLMResponse{Content: "still thinking"}, nil
+			}
+			<-ctx.Done()
+			return core.LLMResponse{}, ctx.Err()
+		},
+	}
+	runtime := New(client, &mockREPLClient{},
+		WithMaxIterations(1),
+		WithMaxTimeout(50*time.Millisecond),
+	)
+	started := time.Now()
+	_, err := runtime.Complete(context.Background(), "test", "query")
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+	var timeoutErr *TimeoutExceededError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("expected TimeoutExceededError, got %T (%v)", err, err)
+	}
+	if callCount != 2 {
+		t.Fatalf("model call count = %d", callCount)
+	}
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("forced-answer timeout took %s", elapsed)
+	}
+}
+
 func TestCompleteErrorThresholdExceeded(t *testing.T) {
 	client := &mockLLMClient{
 		completeFunc: func(ctx context.Context, messages []core.Message) (core.LLMResponse, error) {

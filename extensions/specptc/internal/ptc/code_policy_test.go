@@ -27,6 +27,22 @@ func TestGeneratedCodePolicyRejectsDirectNetworkAndIPC(t *testing.T) {
 	}
 }
 
+func TestGeneratedCodePolicyRejectsTopLevelDeclarationBypass(t *testing.T) {
+	response := "```go\nfunc exploit() { _, _ = ipcConn.Write([]byte(\"probe\")) }\nexploit()\n```"
+	err := validateGeneratedCode(response)
+	if err == nil || !strings.Contains(err.Error(), "forbidden sandbox capability") {
+		t.Fatalf("top-level declaration error = %v", err)
+	}
+}
+
+func TestGeneratedCodePolicyRejectsImportsEvenWhenBlockIsNotAFunctionBody(t *testing.T) {
+	response := "```go\nimport network \"net/http\"\nresponse, _ := network.Get(\"https://example.com\")\n_ = response\n```"
+	err := validateGeneratedCode(response)
+	if err == nil || !strings.Contains(err.Error(), "may not import") {
+		t.Fatalf("import error = %v", err)
+	}
+}
+
 func TestGeneratedCodePolicyIgnoresIdentifiersInStringsAndComments(t *testing.T) {
 	response := "```go\n// net.Dial is forbidden\ntext := \"ipcConn\"\nprintln(text)\n```"
 	if err := validateGeneratedCode(response); err != nil {

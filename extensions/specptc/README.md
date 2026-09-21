@@ -41,20 +41,31 @@ The manifest launches `bin/reasonix-spec-ptc`. No platform-specific executable i
 
 ## RLM provider configuration
 
-The provider uses standard model credentials and keeps them inside the extension process:
+When a Reasonix Codex subscription credential (`$REASONIX_HOME/codex-auth.json`, normally `~/.reasonix/codex-auth.json`) or Codex CLI credential (`~/.codex/auth.json`) is present, the extension automatically uses the subscription-backed `gpt-5.6-sol` model for both root and sub-model calls. It shares the existing credential format, imports the Codex CLI credential into Reasonix storage when needed, and refreshes short-lived OAuth tokens without requiring an API key:
 
 ```bash
+# No provider environment variables are needed after Reasonix or Codex login.
+reasonix --model plugin/spec-ptc/rlm
+```
+
+The extension does not invoke the Codex CLI agent and does not require any Reasonix core changes; its extension-local transport calls the same Codex Responses endpoint using the existing subscription credential.
+
+API-key providers remain available explicitly:
+
+```bash
+export REASONIX_RLM_ROOT_PROVIDER=openai
+export REASONIX_RLM_SUB_PROVIDER=openai
 export REASONIX_RLM_ROOT_MODEL=gpt-5-mini
 export REASONIX_RLM_SUB_MODEL=gpt-5-mini
 export OPENAI_API_KEY=...
 ```
 
-Supported provider selectors are `openai`, `anthropic`, and `gemini`. Model-name detection is automatic for known `rlm-go` models; override it when needed:
+Supported provider selectors are `codex`, `openai`, `anthropic`, and `gemini`. Model-name detection is automatic for known `rlm-go` and Codex subscription models; override it when needed:
 
 - `REASONIX_RLM_ROOT_PROVIDER`
 - `REASONIX_RLM_SUB_PROVIDER`
 
-The matching credential must be set through `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or `GEMINI_API_KEY`.
+API-key providers use `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or `GEMINI_API_KEY`. The `codex` selector uses the existing OAuth subscription credential instead. `REASONIX_RLM_CODEX_EFFORT` controls Codex reasoning effort and defaults to `high`.
 
 Additional RLM settings:
 
@@ -65,15 +76,17 @@ Additional RLM settings:
 - `REASONIX_RLM_MAX_PROMPT_BYTES`: per-prompt and aggregate batch byte limit; default 1 MiB.
 - `REASONIX_RLM_MAX_CONCURRENT_QUERIES`: process-wide and per-turn authoritative sub-model concurrency; default 8.
 - `REASONIX_RLM_MAX_QUERIES`: authoritative calls admitted per turn; default 256.
-- `REASONIX_RLM_TRUSTED_IN_PROCESS`: explicit escape hatch for trusted tests only. Default `false`.
+- `REASONIX_RLM_TRUSTED_IN_PROCESS`: force local in-process execution even when Podman/Docker is available. Local execution is selected automatically when neither container runtime is installed.
 
 Request-scoped `Temperature`, `MaxTokens`, and `ResponseFormat` are rejected because the pinned `rlm-go` provider clients cannot enforce their wire semantics per completion; they are never silently ignored. Use the completion-wide aggregate token accounting ceiling above together with the pre-call query limits for cost containment.
 
 ### Execution isolation
 
-By default, model-generated code is executed through a required Podman/Docker worker. If no supported container backend is available, the provider fails rather than accepting `rlm-go`'s local fallback. The extension-local `rlm-go` fork preserves `--network none` and mounts a mode-restricted Unix socket as the only host transport for `Query`; it never adds a host gateway. The extension also validates every completed code block before execution and rejects direct references to the generated program's `net` package or private IPC connection. Generated source can reach a model only through the bounded `Query` APIs.
+When Podman or Docker is available, model-generated code executes in the constrained container worker. Without either runtime, the extension now falls back automatically to the local Yaegi REPL so the provider remains usable on a standard Reasonix installation. **This fallback has no OS isolation: model-generated Go executes inside the extension process.** The extension still applies generated-code policy checks and query/iteration/time budgets, but those are not a security boundary equivalent to a container. Install Podman/Docker to restore container isolation, or set `REASONIX_RLM_TRUSTED_IN_PROCESS=true` to force the same local behavior even when a container runtime exists.
 
-The worker receives only its generated temporary source directory and Unix IPC directory, has 256 MiB/1 CPU/60 second execution caps, bounded stdout/stderr and IPC frames, and receives no workspace mount. Each execution is also capped at 512 IPC query messages and 16 MiB of aggregate request frames; at most 16 IPC connections are actively handled while up to 64 async handles may queue. The host retains at most 1024 truncated call records. Persisted REPL values use a token-authenticated marker and are reinserted only after host-side inert-literal validation. `REASONIX_RLM_TRUSTED_IN_PROCESS=true` disables container isolation and must not be used with untrusted model output.
+In container mode, the extension-local `rlm-go` fork preserves `--network none` and mounts a mode-restricted Unix socket as the only host transport for `Query`; it never adds a host gateway. The extension also validates every completed code block before execution and rejects direct references to the generated program's `net` package or private IPC connection. Generated source can reach a model only through the bounded `Query` APIs.
+
+The container worker receives only its generated temporary source directory and Unix IPC directory, has 256 MiB/1 CPU/60 second execution caps, bounded stdout/stderr and IPC frames, and receives no workspace mount. Each execution is also capped at 512 IPC query messages and 16 MiB of aggregate request frames; at most 16 IPC connections are actively handled while up to 64 async handles may queue. The host retains at most 1024 truncated call records. Persisted REPL values use a token-authenticated marker and are reinserted only after host-side inert-literal validation.
 
 ## Speculation budgets
 

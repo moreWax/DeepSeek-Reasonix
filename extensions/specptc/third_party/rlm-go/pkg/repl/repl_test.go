@@ -1157,3 +1157,20 @@ func TestNewPooledDeprecated(t *testing.T) {
 		t.Errorf("expected 'test' in stdout, got %q", result.Stdout)
 	}
 }
+
+func TestExecuteHonorsContextDuringInfiniteLoop(t *testing.T) {
+	repl := New(newMockClient())
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	result, err := repl.Execute(ctx, `for {}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("infinite loop cancellation took %s", elapsed)
+	}
+	if !strings.Contains(result.Stderr, context.DeadlineExceeded.Error()) {
+		t.Fatalf("stderr = %q, want context deadline", result.Stderr)
+	}
+}
