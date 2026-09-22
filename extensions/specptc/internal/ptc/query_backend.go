@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/esengine/DeepSeek-Reasonix/extensions/specptc/internal/engine"
 )
@@ -21,11 +22,32 @@ type ToolExecutor interface {
 type queryFuture struct {
 	scope      engine.Scope
 	callID     string
+	traceID    string
+	name       string
+	preview    string
 	cancel     context.CancelFunc
 	done       chan struct{}
+	startedAt  time.Time
+	durationNS atomic.Int64
+	finished   atomic.Bool
 	result     any
 	err        error
+	claimed    atomic.Bool
 	suppressed atomic.Bool
+}
+
+func (f *queryFuture) finishTiming() time.Duration {
+	duration := time.Since(f.startedAt)
+	f.durationNS.Store(int64(duration))
+	f.finished.Store(true)
+	return duration
+}
+
+func (f *queryFuture) duration() (time.Duration, bool) {
+	if !f.finished.Load() {
+		return 0, false
+	}
+	return time.Duration(f.durationNS.Load()), true
 }
 
 type suppressedCall struct {
@@ -45,6 +67,8 @@ type QueryBackend struct {
 	futures    map[engine.Handle]*queryFuture
 	suppressed map[suppressedCall]struct{}
 	onResult   func(string, []byte, any)
+	trace      QueryTraceFunc
+	serial     atomic.Uint64
 }
 
 // NewQueryRuntime constructs a mutually-bound scheduler and result backend.
@@ -75,6 +99,23 @@ func (b *QueryBackend) SetResultHandler(handler func(string, []byte, any)) {
 	b.mu.Unlock()
 }
 
+// SetTraceHandler installs a request-scoped, non-blocking lifecycle observer.
+func (b *QueryBackend) SetTraceHandler(trace QueryTraceFunc) {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	b.trace = trace
+	b.mu.Unlock()
+}
+
+func (b *QueryBackend) emit(event QueryTraceEvent) {
+	b.mu.RLock()
+	trace := b.trace
+	b.mu.RUnlock()
+	emitQueryTrace(trace, event)
+}
+
 func (b *QueryBackend) SuppressCall(scope engine.Scope, callID string) {
 	if b == nil || callID == "" {
 		return
@@ -103,7 +144,11 @@ func (b *QueryBackend) Start(ctx context.Context, request engine.StartRequest) (
 	}
 	execCtx, cancel := context.WithCancel(ctx)
 	handle := engine.Handle(fmt.Sprintf("ptc-%d", b.next.Add(1)))
-	future := &queryFuture{scope: request.Scope, callID: request.Call.CallID, cancel: cancel, done: make(chan struct{})}
+	startedAt := time.Now()
+	future := &queryFuture{
+		scope: request.Scope, callID: request.Call.CallID, traceID: string(handle), name: request.Call.Tool,
+		preview: queryTracePreview(values), cancel: cancel, done: make(chan struct{}), startedAt: startedAt,
+	}
 	b.mu.Lock()
 	if _, blocked := b.suppressed[suppressedCall{scope: request.Scope, callID: request.Call.CallID}]; blocked {
 		b.mu.Unlock()
@@ -113,6 +158,10 @@ func (b *QueryBackend) Start(ctx context.Context, request engine.StartRequest) (
 	b.futures[handle] = future
 	scheduler := b.engine
 	b.mu.Unlock()
+	b.emit(QueryTraceEvent{
+		Kind: QueryTraceDispatch, ID: future.traceID, Name: request.Call.Tool,
+		Preview: future.preview, Speculative: true,
+	})
 	if scheduler == nil {
 		cancel()
 		b.mu.Lock()
@@ -122,7 +171,20 @@ func (b *QueryBackend) Start(ctx context.Context, request engine.StartRequest) (
 	}
 	go func() {
 		future.result, future.err = b.executor.Execute(execCtx, request.Call.Tool, values)
+		duration := future.finishTiming()
 		close(future.done)
+		traceKind := QueryTraceReady
+		switch {
+		case future.suppressed.Load() || execCtx.Err() != nil:
+			traceKind = QueryTraceEvicted
+		case future.err != nil:
+			traceKind = QueryTraceFailed
+		}
+		b.emit(QueryTraceEvent{
+			Kind: traceKind, ID: future.traceID, Name: future.name,
+			Preview: future.preview, Speculative: true,
+			Duration: duration,
+		})
 		completion := engine.CompletionReady
 		if future.err != nil {
 			completion = engine.CompletionFailed
@@ -171,11 +233,13 @@ func (b *QueryBackend) Result(ctx context.Context, handle engine.Handle) (any, e
 // QueryReservation reserves one matching speculative occurrence in caller order
 // and resolves it later without allowing concurrent waits to reorder FIFO claims.
 type QueryReservation struct {
-	backend *QueryBackend
-	handle  engine.Handle
-	claimed bool
-	name    string
-	values  []any
+	backend     *QueryBackend
+	handle      engine.Handle
+	claimed     bool
+	id          string
+	name        string
+	values      []any
+	reserveWait time.Duration
 }
 
 // ReserveClaim synchronously selects speculative work but does not wait for its
@@ -183,9 +247,31 @@ type QueryReservation struct {
 func (b *QueryBackend) ReserveClaim(ctx context.Context, scheduler *engine.Engine, scope engine.Scope, name string, values []any) *QueryReservation {
 	reservation := &QueryReservation{backend: b, name: name, values: append([]any(nil), values...)}
 	arguments, err := encodeArguments(values)
+	claimStarted := time.Now()
 	if err == nil && scheduler != nil {
 		reservation.handle, reservation.claimed = scheduler.Claim(ctx, scope, name, arguments)
 	}
+	reservation.reserveWait = time.Since(claimStarted)
+	if reservation.claimed {
+		b.mu.RLock()
+		future := b.futures[reservation.handle]
+		b.mu.RUnlock()
+		if future != nil {
+			future.claimed.Store(true)
+			reservation.id = future.traceID
+			b.emit(QueryTraceEvent{
+				Kind: QueryTraceClaimHit, ID: future.traceID, Name: name,
+				Preview: queryTracePreview(values), Speculative: true, Hit: true,
+				HeadStart: max(claimStarted.Sub(future.startedAt), 0),
+			})
+		}
+		return reservation
+	}
+	reservation.id = fmt.Sprintf("serial-%d", b.serial.Add(1))
+	b.emit(QueryTraceEvent{
+		Kind: QueryTraceClaimMiss, ID: reservation.id, Name: name,
+		Preview: queryTracePreview(values), Speculative: false,
+	})
 	return reservation
 }
 
@@ -195,13 +281,47 @@ func (r *QueryReservation) Resolve(ctx context.Context) (any, bool, error) {
 	if r == nil || r.backend == nil {
 		return nil, false, errors.New("ptc: nil query reservation")
 	}
+	wait := r.reserveWait
 	if r.claimed {
+		waitStarted := time.Now()
 		result, err := r.backend.Result(ctx, r.handle)
+		wait += time.Since(waitStarted)
 		if err == nil {
+			r.backend.mu.RLock()
+			future := r.backend.futures[r.handle]
+			r.backend.mu.RUnlock()
+			duration := wait
+			if future != nil {
+				if measured, finished := future.duration(); finished {
+					duration = measured
+				}
+			}
+			saved := max(duration-wait, 0)
+			r.backend.emit(QueryTraceEvent{
+				Kind: QueryTraceDone, ID: r.id, Name: r.name,
+				Preview: queryTracePreview(r.values), Speculative: true, Hit: true,
+				Duration: duration, Wait: wait, Saved: saved,
+			})
 			return result, true, nil
 		}
+		r.backend.emit(QueryTraceEvent{
+			Kind: QueryTraceClaimMiss, ID: r.id, Name: r.name,
+			Preview: queryTracePreview(r.values), Speculative: false,
+		})
 	}
+	started := time.Now()
 	result, err := r.backend.executor.Execute(ctx, r.name, r.values)
+	duration := time.Since(started)
+	wait += duration
+	kind := QueryTraceDone
+	if err != nil {
+		kind = QueryTraceFailed
+	}
+	r.backend.emit(QueryTraceEvent{
+		Kind: kind, ID: r.id, Name: r.name,
+		Preview: queryTracePreview(r.values), Speculative: false,
+		Duration: duration, Wait: wait,
+	})
 	return result, false, err
 }
 
@@ -214,14 +334,25 @@ func (b *QueryBackend) ExecuteClaimed(ctx context.Context, scheduler *engine.Eng
 // ReleaseScope removes completed futures after the scheduler has ended a turn.
 func (b *QueryBackend) ReleaseScope(scope engine.Scope) {
 	b.mu.Lock()
-	defer b.mu.Unlock()
+	var evicted []QueryTraceEvent
 	for handle, future := range b.futures {
 		if future.scope == scope {
 			b.suppressed[suppressedCall{scope: scope, callID: future.callID}] = struct{}{}
 			future.suppressed.Store(true)
 			future.cancel()
+			if duration, finished := future.duration(); !future.claimed.Load() && finished {
+				evicted = append(evicted, QueryTraceEvent{
+					Kind: QueryTraceEvicted, ID: future.traceID, Name: future.name,
+					Preview: future.preview, Speculative: true,
+					Duration: duration,
+				})
+			}
 			delete(b.futures, handle)
 		}
+	}
+	b.mu.Unlock()
+	for _, event := range evicted {
+		b.emit(event)
 	}
 }
 

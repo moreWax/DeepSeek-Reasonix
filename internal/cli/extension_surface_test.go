@@ -253,11 +253,71 @@ func TestRunSlashCommandResolutionOrder(t *testing.T) {
 	}
 }
 
+func TestExtensionCardUpdateDoesNotSplitReasoningStream(t *testing.T) {
+	m := newTestChatTUI()
+	m.ingestEvent(event.Event{Kind: event.Reasoning, Text: "thinking"})
+	lineIdx, textIdx := m.reasoningLineIdx, m.reasoningTextIdx
+	m.ingestEvent(event.Event{Kind: event.ExtensionSurface, Extension: &event.ExtensionSurfacePayload{
+		PluginID: "spec-ptc", SurfaceID: "calls-1", Kind: event.ExtensionSurfaceCard,
+		Card: &event.ExtensionCardView{Title: "sPTC · tool calls", Text: "speculating"},
+	}})
+	if m.reasoningLineIdx != lineIdx || m.reasoningTextIdx != textIdx {
+		t.Fatalf("reasoning stream was finalized: marker %d→%d text %d→%d", lineIdx, m.reasoningLineIdx, textIdx, m.reasoningTextIdx)
+	}
+}
+
+func TestExtensionCardPublicationReplacesLiveSurface(t *testing.T) {
+	m := newTestChatTUI()
+	publish := func(text string) {
+		m.ingestEvent(event.Event{Kind: event.ExtensionSurface, Extension: &event.ExtensionSurfacePayload{
+			PluginID: "spec-ptc", SurfaceID: "calls-1", Kind: event.ExtensionSurfaceCard,
+			Card: &event.ExtensionCardView{Title: "sPTC · tool calls", Text: text},
+		}})
+	}
+	publish("speculating")
+	if len(m.transcript) != 1 {
+		t.Fatalf("initial transcript blocks = %d, want 1", len(m.transcript))
+	}
+	publish("cache hit")
+	if len(m.transcript) != 1 {
+		t.Fatalf("replacement transcript blocks = %d, want 1", len(m.transcript))
+	}
+	plain := ansi.Strip(m.transcript[0])
+	if strings.Contains(plain, "speculating") || !strings.Contains(plain, "cache hit") {
+		t.Fatalf("replacement surface = %q", plain)
+	}
+	if len(m.transcriptSources) != 1 || m.transcriptSources[0].kind != transcriptSourceExtensionSurface {
+		t.Fatalf("transcript source = %+v", m.transcriptSources)
+	}
+}
+
+func TestExtensionCardReflowsFromLatestSurface(t *testing.T) {
+	m := newTestChatTUI()
+	m.width = 100
+	m.ingestEvent(event.Event{Kind: event.ExtensionSurface, Extension: &event.ExtensionSurfacePayload{
+		PluginID: "spec-ptc", SurfaceID: "calls-1", Kind: event.ExtensionSurfaceCard,
+		Card: &event.ExtensionCardView{
+			Title:    "sPTC · tool calls",
+			Markdown: "| speculation cache | actually running |\n|---|---|\n| Query(\"a long prompt preview\") | cache hit |",
+		},
+	}})
+	m.reflowTranscript(44)
+	if len(m.transcript) != 1 {
+		t.Fatalf("reflowed transcript blocks = %d, want 1", len(m.transcript))
+	}
+	plain := ansi.Strip(m.transcript[0])
+	for _, want := range []string{"sPTC · tool calls", "speculation", "cache hit"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("reflowed surface missing %q:\n%s", want, plain)
+		}
+	}
+}
+
 func TestIngestExtensionEvents(t *testing.T) {
 	m := newTestChatTUI()
 	m.ingestEvent(event.Event{Kind: event.ExtensionStatus, Extension: statusPayload("warn")})
 	m.ingestEvent(event.Event{Kind: event.ExtensionSurface, Extension: &event.ExtensionSurfacePayload{
-		PluginID: "alpha", Kind: event.ExtensionSurfaceCard,
+		PluginID: "alpha", SurfaceID: "ci", Kind: event.ExtensionSurfaceCard,
 		Card: &event.ExtensionCardView{Title: "CI", Text: "green"},
 	}})
 	m.ingestEvent(event.Event{Kind: event.ExtensionSurface, Extension: &event.ExtensionSurfacePayload{

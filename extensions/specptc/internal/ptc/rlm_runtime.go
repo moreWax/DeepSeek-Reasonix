@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	rlmcore "github.com/XiaoConstantine/rlm-go/pkg/core"
@@ -58,6 +59,7 @@ type RLMRunResult struct {
 // concurrent provider streams.
 type RLMRunControls struct {
 	MaxTokens int
+	Trace     QueryTraceFunc
 }
 
 // Complete executes one RLM turn. The streamed root response is forwarded
@@ -97,6 +99,17 @@ func (r *RLMRuntime) CompleteControlled(
 	if err != nil {
 		return run, err
 	}
+	var actualWaitNS atomic.Int64
+	var savedNS atomic.Int64
+	backend.SetTraceHandler(func(event QueryTraceEvent) {
+		if event.Kind == QueryTraceDone || (event.Kind == QueryTraceFailed && !event.Speculative) {
+			actualWaitNS.Add(int64(event.Wait))
+			if event.Hit {
+				savedNS.Add(int64(event.Saved))
+			}
+		}
+		emitQueryTrace(controls.Trace, event)
+	})
 	defer scheduler.Close()
 	if err := scheduler.Begin(ctx, scope); err != nil {
 		return run, err
@@ -104,6 +117,8 @@ func (r *RLMRuntime) CompleteControlled(
 	defer func() {
 		metrics, endErr := scheduler.End(context.Background(), scope)
 		backend.ReleaseScope(scope)
+		metrics.ActualWait = time.Duration(actualWaitNS.Load())
+		metrics.Saved = time.Duration(savedNS.Load())
 		run.Metrics = metrics
 		if err == nil && endErr != nil {
 			err = endErr

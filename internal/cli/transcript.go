@@ -11,6 +11,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"reasonix/internal/event"
 	"reasonix/internal/provider"
 )
 
@@ -26,6 +27,7 @@ const (
 	transcriptSourceReplayBundle
 	transcriptSourceTurnReceipt
 	transcriptSourceSubagentProgress
+	transcriptSourceExtensionSurface
 )
 
 // transcriptSource retains only the semantic inputs needed to reproduce a
@@ -43,6 +45,7 @@ type transcriptSource struct {
 	planMode     bool
 	maxLines     int
 	history      []provider.Message
+	extension    *event.ExtensionSurfacePayload
 }
 
 func (m *chatTUI) ensureTranscriptSources() {
@@ -113,6 +116,8 @@ func (m *chatTUI) renderTranscriptSource(source transcriptSource, terminalWidth 
 			return m.subagentProgressBlock(source.raw, sp)
 		}
 		return ""
+	case transcriptSourceExtensionSurface:
+		return strings.Join(extensionSurfaceLines(source.extension, contentWidth), "\n")
 	default:
 		return ""
 	}

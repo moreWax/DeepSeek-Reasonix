@@ -22,10 +22,22 @@ type rlmCompleter interface {
 }
 
 type specPTCProvider struct {
-	model   string
-	runtime rlmCompleter
-	log     *log.Logger
-	next    atomic.Uint64
+	model     string
+	runtime   rlmCompleter
+	log       *log.Logger
+	next      atomic.Uint64
+	uiBinding atomic.Pointer[providerUIBinding]
+}
+
+func (p *specPTCProvider) bindUI(params extension.InitializeParams) {
+	if params.Capabilities.UIHost == extension.UIHostHeadless {
+		p.uiBinding.Store(nil)
+		return
+	}
+	p.uiBinding.Store(&providerUIBinding{
+		sessionID: params.Session.SessionID, generation: params.Session.Generation,
+		host: params.Capabilities.UIHost,
+	})
 }
 
 func (p *specPTCProvider) Catalog(context.Context) ([]extension.ProviderDescriptor, error) {
@@ -66,6 +78,7 @@ func (p *specPTCProvider) Stream(ctx context.Context, req extension.StreamReques
 	generation := p.next.Add(1)
 	go func() {
 		defer close(out)
+		uiTrace := newRLMUITrace(ctx, p.uiBinding.Load(), req.StreamID, p.log)
 		scope := engine.Scope{
 			Generation: generation,
 			SessionID:  "provider:" + req.StreamID,
@@ -80,8 +93,15 @@ func (p *specPTCProvider) Stream(ctx context.Context, req extension.StreamReques
 				}
 				return sendProviderChunk(ctx, out, extension.ReasoningChunk(chunk, ""))
 			},
-			ptc.RLMRunControls{},
+			ptc.RLMRunControls{Trace: func(event ptc.QueryTraceEvent) {
+				if uiTrace != nil {
+					uiTrace.observe(event)
+				}
+			}},
 		)
+		if uiTrace != nil {
+			uiTrace.finish(run.Metrics)
+		}
 		if runErr != nil {
 			if p.log != nil {
 				p.log.Printf("RLM stream %s failed: %v", req.StreamID, runErr)
@@ -90,8 +110,9 @@ func (p *specPTCProvider) Stream(ctx context.Context, req extension.StreamReques
 			return
 		}
 		metrics := run.Metrics
-		status := fmt.Sprintf("\n[sPTC dispatched=%d hits=%d misses=%d wasted=%d evictions=%d cancelled=%d]\n",
-			metrics.Dispatched, metrics.Hits, metrics.Misses, metrics.Wasted, metrics.Evictions, metrics.Cancelled)
+		status := fmt.Sprintf("\n[sPTC dispatched=%d hits=%d misses=%d wasted=%d evictions=%d cancelled=%d saved_ms=%d actual_wait_ms=%d]\n",
+			metrics.Dispatched, metrics.Hits, metrics.Misses, metrics.Wasted, metrics.Evictions, metrics.Cancelled,
+			metrics.Saved.Milliseconds(), metrics.ActualWait.Milliseconds())
 		if err := sendProviderChunk(ctx, out, extension.ReasoningChunk(status, "")); err != nil {
 			return
 		}

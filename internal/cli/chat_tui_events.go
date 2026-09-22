@@ -250,19 +250,17 @@ func (m *chatTUI) ingestExtensionStatus(e event.Event) {
 }
 
 func (m *chatTUI) ingestExtensionSurface(e event.Event) {
-	// A published card/form renders as a transcript card; a notification
-	// renders as a notice line. Form fields themselves arrive through the
-	// Ask machinery (the hub translates them), so no dialog work here.
-	m.finalizeStreamed()
+	// A published card/form is an upsert keyed by plugin + surface ID. Keeping
+	// one live transcript slot matches the protocol's replace semantics and lets
+	// extensions animate progress without flooding scrollback.
 	if e.Extension != nil && e.Extension.Notification != nil {
+		m.finalizeStreamed()
 		if line := extensionNotificationLine(e.Extension); line != "" {
 			m.commitLine(line)
 		}
 		return
 	}
-	for _, ln := range extensionSurfaceLines(e.Extension, m.width) {
-		m.commitLine(ln)
-	}
+	m.upsertExtensionSurface(e.Extension)
 }
 
 func (m *chatTUI) ingestCompactionStarted(e event.Event) {

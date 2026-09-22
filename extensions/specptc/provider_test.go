@@ -62,7 +62,8 @@ func TestSpecPTCProviderStreamsReasoningFinalUsageAndDone(t *testing.T) {
 		got[2].Type != extension.ChunkText || got[3].Type != extension.ChunkUsage || got[4].Type != extension.ChunkDone {
 		t.Fatalf("chunks = %+v", got)
 	}
-	if !strings.Contains(got[1].Text, "sPTC dispatched=") {
+	if !strings.Contains(got[1].Text, "sPTC dispatched=") ||
+		!strings.Contains(got[1].Text, "saved_ms=0 actual_wait_ms=0") {
 		t.Fatalf("metrics chunk = %q", got[1].Text)
 	}
 	if completer.query != "question" || !completer.scope.Valid() || completer.controls.MaxTokens != 0 {

@@ -23,6 +23,6 @@
     "command": "${REASONIX_PLUGIN_ROOT}/bin/reasonix-spec-ptc",
     "required": false,
     "replaces": ["speculation"],
-    "capabilities": ["strategies", "providers"]
+    "capabilities": ["strategies", "providers", "ui"]
   }
 }

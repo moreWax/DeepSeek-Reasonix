@@ -21,9 +21,16 @@ The RLM path supports:
 - retraction and cancellation when later streamed code invalidates a bet;
 - worker, in-flight, byte, dispatch, iteration, token, and wall-time budgets;
 - fail-open authoritative execution after misses, rejected bets, or speculative failures;
-- per-turn `dispatched`, `hits`, `misses`, `wasted`, `evictions`, and `cancelled` metrics in the provider reasoning stream.
+- per-turn `dispatched`, `hits`, `misses`, `wasted`, `evictions`, `cancelled`, `saved_ms`, and `actual_wait_ms` metrics in the provider reasoning stream;
+- an upstream-style live `sPTC · tool calls` surface with side-by-side `speculation cache` and `actually running` lanes, including dispatch spinners, cached/evicted states, hit/miss adoption, call duration, authoritative wait, and measured saved latency.
 
 The shadow planner only evaluates an inert Go subset. Unknown expressions taint dependent values and suppress speculation; they never suppress authoritative execution.
+
+### Live tool-call view
+
+On the Reasonix CLI, the extension publishes one structured card per RLM stream through Extension Protocol v2. The CLI updates that card in place rather than appending repeatedly, including when Reasonix itself is running inside Herdr. Its lifecycle mirrors the reference `demo/ui.py` and `demo/codeact.py`: speculative `Query` rows appear immediately, animate while running, become cached, hit, failed, or evicted, and the adjacent `actually running` lane records both claimed hits and authoritative misses. Prompt previews are bounded to two scalar values with per-string truncation; model output, errors, and opaque values are omitted.
+
+A hit reports both the speculative head start at claim time and the measured outcome. `actual_wait_ms` is the aggregate time authoritative `Query` calls actually blocked, including cache misses and failed-speculation fallbacks; `saved_ms` is each successful speculative query's duration minus its authoritative wait, clamped at zero and then summed. These are direct overlap measurements, not a serial-model estimate.
 
 ## Build and install
 
@@ -48,7 +55,7 @@ When a Reasonix Codex subscription credential (`$REASONIX_HOME/codex-auth.json`,
 reasonix --model plugin/spec-ptc/rlm
 ```
 
-The extension does not invoke the Codex CLI agent and does not require any Reasonix core changes; its extension-local transport calls the same Codex Responses endpoint using the existing subscription credential.
+The extension does not invoke the Codex CLI agent and does not require core model-transport changes; its extension-local transport calls the same Codex Responses endpoint using the existing subscription credential. The live call view uses the existing structured-UI protocol; the Reasonix TUI honors that protocol's same-surface replacement semantics so updates redraw one card in place.
 
 API-key providers remain available explicitly:
 

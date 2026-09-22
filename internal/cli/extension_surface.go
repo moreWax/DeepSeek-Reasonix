@@ -78,6 +78,32 @@ func extensionSurfaceLines(p *event.ExtensionSurfacePayload, width int) []string
 	return nil
 }
 
+func (m *chatTUI) upsertExtensionSurface(payload *event.ExtensionSurfacePayload) {
+	if payload == nil || payload.PluginID == "" || payload.SurfaceID == "" {
+		return
+	}
+	snapshot := *payload
+	source := transcriptSource{
+		kind:      transcriptSourceExtensionSurface,
+		raw:       payload.PluginID + "\x00" + payload.SurfaceID,
+		extension: &snapshot,
+	}
+	rendered := m.renderTranscriptSource(source, m.width)
+	if rendered == "" {
+		return
+	}
+	m.ensureTranscriptSources()
+	for i := len(m.transcriptSources) - 1; i >= 0; i-- {
+		prior := m.transcriptSources[i]
+		if prior.kind == transcriptSourceExtensionSurface && prior.raw == source.raw {
+			m.setTranscriptBlock(i, rendered, source)
+			m.transcriptDirty = true
+			return
+		}
+	}
+	m.commitTranscriptSource(source)
+}
+
 // extensionCardLines renders a card surface like the compaction card: an
 // accent ◆ header, the body under a dim "  │ " gutter (markdown through the
 // same renderer assistant answers use), then key/value rows, progress, and

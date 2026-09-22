@@ -177,6 +177,9 @@ type plugin struct {
 }
 
 func (p *plugin) Initialize(_ context.Context, params extension.InitializeParams) (*extension.InitializeResult, error) {
+	if p.provider != nil {
+		p.provider.bindUI(params)
+	}
 	result := &extension.InitializeResult{
 		Name:     "spec-ptc",
 		Version:  "0.2.0",

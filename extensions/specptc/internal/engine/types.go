@@ -110,6 +110,8 @@ type Metrics struct {
 	StartFailures uint64
 	Cancelled     uint64
 	Wasted        uint64
+	ActualWait    time.Duration
+	Saved         time.Duration
 }
 
 // ErrClosed reports an engine that is shutting down.
